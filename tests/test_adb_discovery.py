@@ -6,6 +6,7 @@ file created under ``tmp_path``.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -22,6 +23,10 @@ _ADB = "adb.exe" if sys.platform == "win32" else "adb"
 def _make(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("fake", encoding="utf-8")
+    if sys.platform != "win32":
+        # A real adb on POSIX is executable; PATH lookup (shutil.which) and
+        # is_valid_adb require X_OK, so fixtures must mimic a real binary.
+        os.chmod(path, 0o755)
     return path
 
 

@@ -57,7 +57,7 @@ def is_valid_adb(path: str | os.PathLike[str] | None) -> bool:
         return candidate.name.lower() in _VALID_WINDOWS_NAMES
     if candidate.name != "adb":
         return False
-    return os.access(candidate, os.X_OK) or True  # adb without +x still works on Windows
+    return os.access(candidate, os.X_OK)
 
 
 def version_validator(timeout: float = 10.0) -> Callable[[str], bool]:
