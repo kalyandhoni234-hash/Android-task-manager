@@ -8,6 +8,7 @@ import time
 from typing import Sequence
 
 from .adb.connection import ConnectionManager
+from .adb.discovery import find_adb
 from .adb.exceptions import ADBAmbiguousDeviceError, ADBError
 from .battery.collector import BatteryCollector
 from .cpu.collector import CPUCollector
@@ -30,8 +31,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--adb",
-        default="adb",
-        help="Path to the adb executable (default: 'adb' from PATH).",
+        default=None,
+        help=(
+            "Path to the adb executable. When omitted, adb is located "
+            "automatically (beside the app, on PATH, or in a standard SDK folder)."
+        ),
     )
     parser.add_argument(
         "--device",
@@ -99,7 +103,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         connection = ConnectionManager(
-            adb_path=args.adb,
+            adb_path=find_adb(explicit=args.adb) or args.adb or "adb",
             timeout=args.timeout,
             device_serial=args.device_serial,
         )

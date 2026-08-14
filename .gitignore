@@ -11,10 +11,12 @@ htmlcov/
 .venv/
 venv/
 env/
+.venv-build/
 
 # Packaging / build artifacts
 dist/
 build/
+*.spec
 *.egg-info/
 *.egg
 

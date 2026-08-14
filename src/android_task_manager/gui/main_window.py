@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
+    QMessageBox,
     QScrollArea,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -20,6 +22,7 @@ from ..network.models import NetworkSnapshot
 from ..process.inspector_models import ProcessInspectionSnapshot
 from ..process.models import ProcessSnapshot
 from .monitor import ConnectionState, MonitorWorker
+from .setup_panel import INSTALL_ADB_STEPS, USB_DEBUGGING_STEPS, SetupPanel
 from .widgets.battery_widget import BatteryWidget
 from .widgets.cpu_widget import CPUWidget
 from .widgets.device_widget import DeviceWidget
@@ -29,7 +32,12 @@ from .widgets.process_widget import ProcessWidget
 
 
 class MainWindow(QMainWindow):
-    """Desktop dashboard consuming the monitor's normalized snapshots."""
+    """Desktop dashboard consuming the monitor's normalized snapshots.
+
+    The central area is a two-page stack: the first-run setup panel (shown
+    until a device connects) and the live dashboard. Connection-state changes
+    flip between the two pages.
+    """
 
     #: Emitted when the window is closed; the app uses it to stop the worker.
     closed = Signal()
@@ -38,10 +46,25 @@ class MainWindow(QMainWindow):
     #: inspection worker (queued onto that worker's thread).
     inspect_requested = Signal(object)
 
+    #: The user asked to re-try the connection from the setup screen.
+    retry_requested = Signal()
+    #: The user asked to locate an adb executable via a file dialog.
+    locate_requested = Signal()
+    #: (serial) the user picked a device from the multi-device list.
+    device_connect_requested = Signal(object)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Android Task Manager")
         self.resize(960, 760)
+
+        self.setup = SetupPanel()
+        self.setup.retry_requested.connect(self.retry_requested.emit)
+        self.setup.locate_requested.connect(self.locate_requested.emit)
+        self.setup.device_selected.connect(self.device_connect_requested.emit)
+        self.setup.usb_help_requested.connect(self.show_usb_help)
+        self.setup.install_help_requested.connect(self.show_install_help)
+        self.setup.refresh_requested.connect(self.retry_requested.emit)
 
         self.device = DeviceWidget()
         self.cpu = CPUWidget()
@@ -80,7 +103,11 @@ class MainWindow(QMainWindow):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         scroll.setWidget(container)
-        self.setCentralWidget(scroll)
+
+        self._stack = QStackedWidget()
+        self._stack.addWidget(self.setup)
+        self._stack.addWidget(scroll)
+        self.setCentralWidget(self._stack)
 
     # ------------------------------------------------------------------
     # Monitor signal handlers (GUI thread)
@@ -108,8 +135,23 @@ class MainWindow(QMainWindow):
     def update_device(self, label: str, android_version: str) -> None:
         self.device.set_info(label, android_version)
 
+    def update_devices(self, devices: list[dict[str, str]]) -> None:
+        """Fill the multi-device picker on the setup screen."""
+        self.setup.set_devices(devices)
+
     def update_connection(self, state: ConnectionState, detail: str) -> None:
         self.device.set_status(state, detail)
+        if state is ConnectionState.CONNECTED:
+            self._stack.setCurrentIndex(1)
+        else:
+            self._stack.setCurrentIndex(0)
+            self.setup.show_state(state, detail)
+
+    def show_usb_help(self) -> None:
+        QMessageBox.information(self, "Enable USB debugging", USB_DEBUGGING_STEPS)
+
+    def show_install_help(self) -> None:
+        QMessageBox.information(self, "Install ADB", INSTALL_ADB_STEPS)
 
     # ------------------------------------------------------------------
     # Process inspection result handlers (GUI thread)
@@ -144,6 +186,7 @@ def wire(window: MainWindow, worker: MonitorWorker) -> None:
     worker.snapshots.connect(window.update_snapshots)
     worker.device_info.connect(window.update_device)
     worker.connection_changed.connect(window.update_connection)
+    worker.devices_available.connect(window.update_devices)
     window.closed.connect(worker.stop)
 
 

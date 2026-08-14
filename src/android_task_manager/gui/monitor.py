@@ -19,7 +19,10 @@ from PySide6.QtCore import QObject, Signal
 
 from ..adb.connection import CommandRunner, ConnectionManager
 from ..adb.exceptions import (
+    ADBAmbiguousDeviceError,
+    ADBDisconnectedError,
     ADBError,
+    ADBNotFoundError,
     ADBNoDeviceError,
     ADBTimeoutError,
     ADBUnauthorizedError,
@@ -36,6 +39,13 @@ class ConnectionState(Enum):
 
     CONNECTED = "connected"
     DISCONNECTED = "disconnected"
+    #: adb itself could not be found / is not usable.
+    ADB_MISSING = "adb missing"
+    #: adb works, but the device is connected and "offline" (bad cable, adb
+    #: server hiccup, or the device just dropped off the bus).
+    OFFLINE = "offline"
+    #: More than one authorized device; the GUI must let the user pick one.
+    MULTIPLE_DEVICES = "multiple devices"
     ADB_ERROR = "adb error"
     UNAUTHORIZED = "unauthorized"
     TIMEOUT = "timeout"
@@ -58,6 +68,13 @@ class MonitorWorker(QObject):
     device_info = Signal(str, str)
     #: (ConnectionState, error_detail)
     connection_changed = Signal(object, str)
+    #: (list[dict]) — attached devices for the multi-device selection UI. Each
+    #: entry has "serial", "state", "label" (manufacturer + model) and
+    #: "android_version" keys.
+    devices_available = Signal(object)
+
+    #: How long to wait between failed connection attempts in ``run``.
+    _RETRY_DELAY_S = 2.0
 
     def __init__(
         self,
@@ -109,9 +126,20 @@ class MonitorWorker(QObject):
         self._stopped = True
 
     def run(self) -> None:
-        """The worker-thread entry point: connect, then sample forever."""
-        self._connect()
+        """The worker-thread entry point: connect, then sample forever.
+
+        Connection is attempted immediately and re-attempted every
+        ``_RETRY_DELAY_S`` while it fails, so hot-plugging a phone, authorizing
+        USB debugging, or locating adb mid-session recovers without restarting
+        the app. Sampling only starts once a device is connected.
+        """
+        self._connected = False
         while not self._stopped:
+            if not self._connected:
+                self._connect()
+                if not self._connected:
+                    time.sleep(self._RETRY_DELAY_S)
+                    continue
             start = time.monotonic()
             self.tick()
             elapsed = time.monotonic() - start
@@ -126,15 +154,76 @@ class MonitorWorker(QObject):
             release = self._connection.shell(["getprop", "ro.build.version.release"]).strip()
             label = f"{manufacturer} {model}".strip() or serial
             self.device_info.emit(label, release or "Unknown")
+            self._connected = True
             self.connection_changed.emit(ConnectionState.CONNECTED, "")
+        except ADBNotFoundError as exc:
+            self._connected = False
+            self.connection_changed.emit(ConnectionState.ADB_MISSING, str(exc))
+        except ADBAmbiguousDeviceError as exc:
+            self._connected = False
+            self.connection_changed.emit(ConnectionState.MULTIPLE_DEVICES, str(exc))
+            self._report_devices()
+        except ADBNoDeviceError as exc:
+            self._connected = False
+            self.connection_changed.emit(ConnectionState.DISCONNECTED, str(exc))
+        except ADBDisconnectedError as exc:
+            self._connected = False
+            self.connection_changed.emit(ConnectionState.OFFLINE, str(exc))
         except ADBUnauthorizedError as exc:
+            self._connected = False
             self.connection_changed.emit(ConnectionState.UNAUTHORIZED, str(exc))
         except ADBTimeoutError as exc:
+            self._connected = False
             self.connection_changed.emit(ConnectionState.TIMEOUT, str(exc))
-        except ADBError as exc:
-            self.connection_changed.emit(ConnectionState.ADB_ERROR, str(exc))
         except Exception as exc:  # noqa: BLE001 - never surface tracebacks
+            self._connected = False
             self.connection_changed.emit(ConnectionState.ADB_ERROR, str(exc))
+
+    def _report_devices(self) -> None:
+        """Enumerate attached devices (best-effort) for the selection UI."""
+        devices: list[dict[str, str]] = []
+        try:
+            for device in self._connection.list_devices():
+                entry = {"serial": device.serial, "state": device.state}
+                if device.state == "device":
+                    details = self._connection.get_device_details(device.serial)
+                    manufacturer = details.get("ro.product.manufacturer", "")
+                    model = details.get("ro.product.model", "")
+                    entry["label"] = f"{manufacturer} {model}".strip() or device.serial
+                    entry["android_version"] = details.get("ro.build.version.release", "")
+                else:
+                    entry["label"] = device.serial
+                    entry["android_version"] = ""
+                devices.append(entry)
+        except Exception:  # noqa: BLE001 - listing must never crash the loop
+            devices = []
+        self.devices_available.emit(devices)
+
+    # ------------------------------------------------------------------
+    # GUI-driven reconfiguration (invoked from the GUI thread; delivered
+    # on the worker thread via Qt's queued connections)
+    # ------------------------------------------------------------------
+
+    def retry(self) -> None:
+        """Re-attempt the connection immediately (e.g. the Retry button)."""
+        if not self._stopped:
+            self._connect()
+
+    def set_adb_path(self, adb_path: str) -> None:
+        """Switch the shared connection to a different adb executable."""
+        setter = getattr(self._connection, "set_adb_path", None)
+        if setter is not None:
+            setter(adb_path)
+        if not self._stopped:
+            self._connect()
+
+    def select_device(self, serial: str) -> None:
+        """Pin the target device to *serial* and reconnect to it."""
+        setter = getattr(self._connection, "set_device_serial", None)
+        if setter is not None:
+            setter(serial)
+        if not self._stopped:
+            self._connect()
 
     def tick(self) -> None:
         """Collect one round of samples and publish the cached snapshots.
@@ -153,6 +242,9 @@ class MonitorWorker(QObject):
                 errors.append(f"{label}: {exc}")
             except ADBTimeoutError as exc:
                 state = ConnectionState.TIMEOUT
+                errors.append(f"{label}: {exc}")
+            except ADBDisconnectedError as exc:
+                state = ConnectionState.OFFLINE
                 errors.append(f"{label}: {exc}")
             except ADBNoDeviceError as exc:
                 state = ConnectionState.DISCONNECTED

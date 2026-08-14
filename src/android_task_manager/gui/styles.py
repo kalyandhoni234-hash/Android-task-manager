@@ -84,6 +84,54 @@ QPushButton#link:hover {
 QPushButton#link:pressed {
     color: #2a7fc9;
 }
+QPushButton#primary {
+    background-color: #2f6fed;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 9px 20px;
+    font-weight: 600;
+}
+QPushButton#primary:hover {
+    background-color: #3d7df5;
+}
+QPushButton#primary:pressed {
+    background-color: #2559c2;
+}
+QPushButton#secondary {
+    background-color: #232b35;
+    color: #d8dee6;
+    border: 1px solid #2a323c;
+    border-radius: 6px;
+    padding: 9px 20px;
+    font-weight: 500;
+}
+QPushButton#secondary:hover {
+    background-color: #2b3541;
+}
+QLabel#setupTitle {
+    font-size: 26px;
+    font-weight: 600;
+    color: #e8eef5;
+}
+QListWidget#deviceList {
+    background-color: #1d232b;
+    border: 1px solid #2a323c;
+    border-radius: 8px;
+    color: #d8dee6;
+    outline: none;
+    padding: 4px;
+}
+QListWidget#deviceList::item {
+    padding: 10px 12px;
+    border-radius: 6px;
+}
+QListWidget#deviceList::item:selected {
+    background-color: #2b3a4d;
+}
+QListWidget#deviceList::item:hover {
+    background-color: #232b35;
+}
 QHeaderView::section {
     background-color: #232b35;
     color: #7a8794;

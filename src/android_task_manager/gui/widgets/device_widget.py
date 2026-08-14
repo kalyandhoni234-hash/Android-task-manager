@@ -47,7 +47,10 @@ class DeviceWidget(QWidget):
     def set_status(self, state: ConnectionState, detail: str) -> None:
         mapping = {
             ConnectionState.CONNECTED: ("\u25cf Connected", "statusConnected"),
-            ConnectionState.DISCONNECTED: ("\u25cb Disconnected", "statusError"),
+            ConnectionState.DISCONNECTED: ("\u25cb No device", "statusError"),
+            ConnectionState.ADB_MISSING: ("\u26a0 ADB not found", "statusError"),
+            ConnectionState.OFFLINE: ("\u26a0 Device offline", "statusWarn"),
+            ConnectionState.MULTIPLE_DEVICES: ("\u26a0 Multiple devices", "statusWarn"),
             ConnectionState.ADB_ERROR: ("\u26a0 adb error", "statusError"),
             ConnectionState.UNAUTHORIZED: ("\u26a0 Not authorized", "statusWarn"),
             ConnectionState.TIMEOUT: ("\u26a0 Timed out", "statusWarn"),

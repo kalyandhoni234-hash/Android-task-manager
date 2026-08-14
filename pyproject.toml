@@ -25,8 +25,9 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-# Test/build tooling: pytest for the suite, build for wheel/sdist creation.
-dev = ["pytest>=7.0", "build>=1.0"]
+# Test/build tooling: pytest for the suite, build for wheel/sdist creation,
+# pyinstaller for the standalone Windows executables (packaging/build_windows.ps1).
+dev = ["pytest>=7.0", "build>=1.0", "pyinstaller>=6.0"]
 # PySide6: the single GUI dependency (Qt for Python). It powers the desktop
 # dashboard only; the terminal mode does not need it. Install with:
 #   pip install -e ".[gui]"

@@ -69,6 +69,18 @@ class ConnectionManager:
         self._timeout = timeout
         self._device_serial = device_serial
 
+    def set_adb_path(self, adb_path: str) -> None:
+        """Point this connection at a different adb executable.
+
+        All collectors and workers that share this ConnectionManager (the
+        design used by the GUI) pick up the new path on their next command.
+        """
+        self._adb_path = adb_path
+
+    def set_device_serial(self, device_serial: str | None) -> None:
+        """Pin (or unpin) the target device by serial."""
+        self._device_serial = device_serial
+
     # ------------------------------------------------------------------
     # Availability / discovery
     # ------------------------------------------------------------------
@@ -109,8 +121,9 @@ class ConnectionManager:
         if self._device_serial is not None:
             for device in devices:
                 if device.serial == self._device_serial:
+                    if device.state == _AUTHORIZED_STATE:
+                        return device.serial
                     self._raise_for_state(device)
-                    return device.serial
             raise ADBDisconnectedError(
                 f"Specified device {self._device_serial} is not present."
             )
@@ -204,3 +217,27 @@ class ConnectionManager:
     def get_prop(self, name: str) -> str:
         """Read a device system property (empty string if unset)."""
         return self.shell(["getprop", name]).strip()
+
+    def get_device_details(self, serial: str) -> dict[str, str]:
+        """Best-effort identity details for a specific device serial.
+
+        Runs three cheap ``getprop`` reads (manufacturer, model, Android
+        version) on the named serial, tolerating per-property failures so the
+        multi-device selection UI never dies on a flaky device. Keys mirror the
+        property names, with missing values reported as empty strings.
+        """
+        details: dict[str, str] = {}
+        for prop in (
+            "ro.product.manufacturer",
+            "ro.product.model",
+            "ro.build.version.release",
+        ):
+            try:
+                result = self.execute(
+                    ["-s", serial, "shell", "getprop", prop],
+                    timeout=min(self._timeout, 5.0),
+                )
+                details[prop] = result.stdout.strip() if result.exit_code == 0 else ""
+            except ADBError:
+                details[prop] = ""
+        return details

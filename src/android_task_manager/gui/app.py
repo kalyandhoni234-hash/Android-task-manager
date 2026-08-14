@@ -11,10 +11,12 @@ PySide6 imports are deferred to ``main()`` so that ``--help`` and the clean
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from typing import Sequence
 
 from ..adb.connection import ConnectionManager
+from ..adb.discovery import find_adb, is_valid_adb
 
 _DEFAULT_INTERVAL = 2.0
 _DEFAULT_MEMORY_INTERVAL = 10.0
@@ -30,8 +32,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--adb",
-        default="adb",
-        help="Path to the adb executable (default: 'adb' from PATH).",
+        default=None,
+        help=(
+            "Path to the adb executable. When omitted, adb is located "
+            "automatically (beside the app, on PATH, or in a standard SDK folder)."
+        ),
     )
     parser.add_argument(
         "--device",
@@ -101,8 +106,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # One shared ConnectionManager: the monitoring worker samples snapshots on
     # its thread; the inspection worker reads /proc/<pid> files on its own.
+    # ADB is discovered unless the user gave an explicit path; the setup screen
+    # can later redirect the shared connection via "Locate ADB".
+    adb_path = find_adb(explicit=args.adb) or args.adb or "adb"
     connection = ConnectionManager(
-        adb_path=args.adb,
+        adb_path=adb_path,
         timeout=args.timeout,
         device_serial=args.device_serial,
     )
@@ -118,6 +126,38 @@ def main(argv: Sequence[str] | None = None) -> int:
     inspector = ProcessInspectionWorker(connection=connection, timeout=args.timeout)
     wire(window, worker)
     wire_inspector(window, inspector)
+
+    # First-run setup flow: the window asks; the shared connection + worker
+    # react. Retry/relocate/device-pick are delivered onto the worker thread.
+    window.retry_requested.connect(worker.retry)
+    window.device_connect_requested.connect(worker.select_device)
+
+    def on_locate_requested() -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        chosen, _ = QFileDialog.getOpenFileName(
+            window,
+            "Locate adb executable",
+            "",
+            "adb executable (adb.exe;adb.bat;adb.cmd;adb)",
+        )
+        if chosen and is_valid_adb(chosen):
+            connection.set_adb_path(str(chosen))
+            worker.retry()
+
+    window.locate_requested.connect(on_locate_requested)
+
+    if os.environ.get("ATMAN_DEBUG"):
+        worker.connection_changed.connect(
+            lambda state, detail: print(
+                f"[debug] state: {state.value} - {detail}", flush=True
+            )
+        )
+        worker.device_info.connect(
+            lambda label, version: print(
+                f"[debug] device: {label} (Android {version})", flush=True
+            )
+        )
 
     thread = QThread()
     worker.moveToThread(thread)

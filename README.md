@@ -115,14 +115,75 @@ blocks.
 
 ## Requirements
 
-- Python >= 3.10
-- ADB (Android platform-tools) — either on `PATH` or passed via `--adb`
+- Python >= 3.10 *(build/running from source only — the packaged Windows
+  executable does not need Python)*
+- ADB (Android platform-tools) — located automatically (see **ADB
+  discovery** below) or passed via `--adb`
 - An Android device with USB debugging enabled, connected and authorized
 
 The core application uses only the Python standard library. PySide6 is an
 optional extra used by the GUI alone.
 
-## Installation (Windows)
+### ADB discovery
+
+The app finds `adb` without you having to touch your `PATH`, in this priority
+order:
+
+1. The explicit path you passed (`--adb`, or "Locate ADB" in the GUI).
+2. An `adb.exe` you placed next to the app itself (distribution-local copy).
+3. `adb` on `PATH`.
+4. Well-known Android SDK locations, detected safely (only when the file
+   actually exists): `%ANDROID_HOME%/platform-tools`,
+   `%ANDROID_SDK_ROOT%/platform-tools` and (Windows)
+   `%LOCALAPPDATA%\Android\Sdk\platform-tools`.
+
+ADB is **not bundled** with the app — see "Why is ADB not bundled?" below.
+
+## Standalone Windows executable (no Python required)
+
+For end users, a pre-built `AndroidTaskManager.exe` is the intended entry
+point. It is a self-contained PySide6 application; you do **not** need to
+install Python or any package.
+
+- **First run** shows a connection-setup screen that guides you through the
+  only remaining requirement (ADB + a connected device):
+  - **ADB not found** → *Locate ADB* (pick `adb.exe`) or *How to install ADB*.
+  - **No device detected** → connect the phone and enable USB debugging.
+  - **Authorization required** → accept the USB debugging prompt on the phone.
+  - **Device is offline** → reconnect the cable (or restart the adb server).
+  - **Multiple devices** → choose which device to monitor.
+- The screen **auto-retries** every couple of seconds, and you can hit *Retry*
+  at any time — plugging in a phone, authorizing, or locating adb mid-session
+  recovers without restarting the app.
+- Once connected, the live dashboard appears and everything is read-only.
+
+### Why is ADB not bundled?
+
+The official `adb.exe` binaries are distributed under the [Android SDK License
+Agreement](https://developer.android.com/tools/releases/platform-tools), whose
+terms restrict redistribution. The safeguard is to let you supply `adb`
+yourself: the app finds one you already have, or you download Platform-Tools
+from Google and point the app at it (or drop `adb.exe` next to
+`AndroidTaskManager.exe`). If you compile `adb` yourself from the [AOSP
+source](https://android.googlesource.com/platform/packages/modules/adb/)
+(Apache-2.0), you are free to distribute that binary with your own build.
+
+### Build the Windows executable
+
+Prerequisite: Python 3.10+ on `PATH` (only needed to build).
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
+```
+
+This creates a clean `.venv-build`, installs the app + PyInstaller, and
+produces:
+
+- `dist\AndroidTaskManager.exe` — windowed build for normal users.
+- `dist\AndroidTaskManager-debug.exe` — console build that echoes connection
+  state transitions to stdout (diagnostics).
+
+## Installation (Windows, from source)
 
 1. **Install Python** (>= 3.10) from <https://www.python.org/downloads/>.
    During installation, check **"Add python.exe to PATH"**.
@@ -184,7 +245,7 @@ All flags:
 
 | Flag | Meaning | Default |
 | --- | --- | --- |
-| `--adb PATH` | Path to the adb executable (use when not on `PATH`) | `adb` |
+| `--adb PATH` | Path to the adb executable (normally located automatically) | auto-detect |
 | `--device SERIAL` | Explicit adb serial of the target device | auto-detect |
 | `--interval SECONDS` | Seconds between CPU samples | `2.0` |
 | `--samples N` | Stop after N samples (omit for an endless loop; stop with Ctrl+C) | run forever |
@@ -225,7 +286,12 @@ accepts the same `--adb`, `--device`, `--interval`, `--process-interval`,
 The dashboard shows, top to bottom:
 
 - **Device** — manufacturer/model label, Android version, live connection
-  state (connected / disconnected / adb error / not authorized / timed out).
+  state (connected / no device / ADB not found / offline / multiple devices /
+  not authorized / timed out).
+
+Before the dashboard appears, a **connection-setup screen** is shown whenever
+the app cannot reach exactly one device; it explains what is missing and how
+to fix it, with a *Retry* button (the app also auto-retries automatically).
 - **CPU** — overall utilization, the recent-history graph, and one bar per
   core with frequency.
 - **Memory** — available memory as the headline figure, a used-share bar, and
@@ -394,8 +460,10 @@ python -m pytest
 - The suite runs entirely against fixed fixtures based on verified Vivo V2026
   output — **no physical device is required**.
 - **GUI tests run headlessly** using Qt's `offscreen` platform plugin
-  (`QT_QPA_PLATFORM=offscreen`); they construct widgets, deliver snapshots
-  and drive the monitor worker without a display.
+  (`QT_QPA_PLATFORM=offscreen`); they construct widgets, deliver snapshots,
+  drive the monitor worker, and cover the first-run setup flow (each
+  connection state, the multi-device picker, and ADB discovery) without a
+  display.
 - **Live Android-device testing is separate from CI.** USB
   disconnect/reconnect, authorization and long-run stability checks are
   performed manually on real hardware and are intentionally not part of the
