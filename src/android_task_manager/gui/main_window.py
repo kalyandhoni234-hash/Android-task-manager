@@ -1,0 +1,159 @@
+"""Main dashboard window: sections wired to the monitor's signals."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QMainWindow,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ..battery.models import BatterySnapshot
+from ..cpu.models import CPUSnapshot
+from ..memory.models import MemorySnapshot
+from ..network.models import NetworkSnapshot
+from ..process.inspector_models import ProcessInspectionSnapshot
+from ..process.models import ProcessSnapshot
+from .monitor import ConnectionState, MonitorWorker
+from .widgets.battery_widget import BatteryWidget
+from .widgets.cpu_widget import CPUWidget
+from .widgets.device_widget import DeviceWidget
+from .widgets.memory_widget import MemoryWidget
+from .widgets.network_widget import NetworkWidget
+from .widgets.process_widget import ProcessWidget
+
+
+class MainWindow(QMainWindow):
+    """Desktop dashboard consuming the monitor's normalized snapshots."""
+
+    #: Emitted when the window is closed; the app uses it to stop the worker.
+    closed = Signal()
+
+    #: (pid) the user selected a process row; the app forwards it to the
+    #: inspection worker (queued onto that worker's thread).
+    inspect_requested = Signal(object)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Android Task Manager")
+        self.resize(960, 760)
+
+        self.device = DeviceWidget()
+        self.cpu = CPUWidget()
+        self.memory = MemoryWidget()
+        self.processes = ProcessWidget()
+        self.battery = BatteryWidget()
+        self.network = NetworkWidget()
+
+        #: Most recent ProcessSnapshot, kept so inspection results can be
+        #: associated with the matching ProcessInfo (cpu/memory percent).
+        self._latest_processes: ProcessSnapshot | None = None
+
+        self.processes.inspection_requested.connect(self.inspect_requested.emit)
+
+        top_row = QHBoxLayout()
+        top_row.addWidget(self.cpu, 1)
+        top_row.addWidget(self.memory, 1)
+
+        bottom_row = QHBoxLayout()
+        bottom_row.addWidget(self.battery, 1)
+        bottom_row.addWidget(self.network, 1)
+
+        content = QVBoxLayout()
+        content.setContentsMargins(12, 2, 12, 2)
+        content.setSpacing(6)
+        content.addWidget(self.device)
+        content.addLayout(top_row)
+        content.addWidget(self.processes, 1)
+        content.addLayout(bottom_row)
+
+        container = QWidget()
+        container.setObjectName("dashboard")
+        container.setLayout(content)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(container)
+        self.setCentralWidget(scroll)
+
+    # ------------------------------------------------------------------
+    # Monitor signal handlers (GUI thread)
+    # ------------------------------------------------------------------
+
+    def update_snapshots(
+        self,
+        cpu: CPUSnapshot,
+        memory: MemorySnapshot | None,
+        processes: ProcessSnapshot | None,
+        battery: BatterySnapshot | None,
+        network: NetworkSnapshot | None,
+    ) -> None:
+        self.cpu.set_snapshot(cpu)
+        if memory is not None:
+            self.memory.set_snapshot(memory)
+        if processes is not None:
+            self._latest_processes = processes
+            self.processes.set_snapshot(processes)
+        if battery is not None:
+            self.battery.set_snapshot(battery)
+        if network is not None:
+            self.network.set_snapshot(network)
+
+    def update_device(self, label: str, android_version: str) -> None:
+        self.device.set_info(label, android_version)
+
+    def update_connection(self, state: ConnectionState, detail: str) -> None:
+        self.device.set_status(state, detail)
+
+    # ------------------------------------------------------------------
+    # Process inspection result handlers (GUI thread)
+    # ------------------------------------------------------------------
+
+    def on_inspection_ready(self, snapshot: ProcessInspectionSnapshot) -> None:
+        """Attach the table's latest CPU/MEM metrics, then render the panel."""
+        info = None
+        if self._latest_processes is not None:
+            info = next(
+                (p for p in self._latest_processes.processes if p.pid == snapshot.pid), None
+            )
+        if info is not None:
+            snapshot = replace(
+                snapshot,
+                cpu_percent=info.cpu_percent,
+                memory_percent=info.memory_percent,
+            )
+        self.processes.show_inspection(snapshot)
+
+    def on_inspection_failed(self, pid: int, message: str) -> None:
+        """Show the clean "process no longer available" state."""
+        self.processes.show_inspection_gone(pid, message)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self.closed.emit()
+        super().closeEvent(event)
+
+
+def wire(window: MainWindow, worker: MonitorWorker) -> None:
+    """Connect a MonitorWorker's signals to the MainWindow slots."""
+    worker.snapshots.connect(window.update_snapshots)
+    worker.device_info.connect(window.update_device)
+    worker.connection_changed.connect(window.update_connection)
+    window.closed.connect(worker.stop)
+
+
+def wire_inspector(window: MainWindow, inspector) -> None:
+    """Connect the process-inspection worker to the window.
+
+    ``inspect_requested`` is emitted on the GUI thread and delivered onto the
+    inspector worker's own thread via Qt's queued connection, so /proc reads
+    never block the dashboard. Results are delivered back the same way.
+    """
+    window.inspect_requested.connect(inspector.request_inspect)
+    inspector.inspection_ready.connect(window.on_inspection_ready)
+    inspector.inspection_failed.connect(window.on_inspection_failed)

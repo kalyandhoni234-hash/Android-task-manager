@@ -1,0 +1,1 @@
+"""Terminal-facing layer (renderers)."""

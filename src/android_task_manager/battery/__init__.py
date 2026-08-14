@@ -1,0 +1,1 @@
+"""Battery monitoring: parser, collector and normalized data models."""

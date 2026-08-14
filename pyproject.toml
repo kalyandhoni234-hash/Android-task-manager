@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "android-task-manager"
+version = "0.1.0"
+description = "Terminal-based Android Task Manager / System Monitor that talks to a device over ADB."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Android Task Manager project" }]
+classifiers = [
+    "Environment :: Console",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Monitoring",
+]
+dependencies = []
+
+[project.optional-dependencies]
+# Test/build tooling: pytest for the suite, build for wheel/sdist creation.
+dev = ["pytest>=7.0", "build>=1.0"]
+# PySide6: the single GUI dependency (Qt for Python). It powers the desktop
+# dashboard only; the terminal mode does not need it. Install with:
+#   pip install -e ".[gui]"
+gui = ["PySide6>=6.5"]
+
+[project.scripts]
+android-task-manager = "android_task_manager.main:main"
+android-task-manager-gui = "android_task_manager.gui.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
