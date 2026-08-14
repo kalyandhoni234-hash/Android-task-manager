@@ -8,7 +8,7 @@ import time
 from typing import Sequence
 
 from .adb.connection import ConnectionManager
-from .adb.discovery import find_adb
+from .adb.discovery import find_adb, version_validator
 from .adb.exceptions import ADBAmbiguousDeviceError, ADBError
 from .battery.collector import BatteryCollector
 from .cpu.collector import CPUCollector
@@ -103,7 +103,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         connection = ConnectionManager(
-            adb_path=find_adb(explicit=args.adb) or args.adb or "adb",
+            adb_path=(
+                find_adb(explicit=args.adb, validator=version_validator(args.timeout))
+                or args.adb
+                or "adb"
+            ),
             timeout=args.timeout,
             device_serial=args.device_serial,
         )

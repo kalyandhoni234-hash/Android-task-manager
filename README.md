@@ -129,13 +129,20 @@ optional extra used by the GUI alone.
 The app finds `adb` without you having to touch your `PATH`, in this priority
 order:
 
-1. The explicit path you passed (`--adb`, or "Locate ADB" in the GUI).
+1. The explicit path you passed (`--adb`, or "Locate ADB" in the GUI) —
+   verified with `adb version` before it is used.
 2. An `adb.exe` you placed next to the app itself (distribution-local copy).
 3. `adb` on `PATH`.
 4. Well-known Android SDK locations, detected safely (only when the file
    actually exists): `%ANDROID_HOME%/platform-tools`,
    `%ANDROID_SDK_ROOT%/platform-tools` and (Windows)
-   `%LOCALAPPDATA%\Android\Sdk\platform-tools`.
+   `%LOCALAPPDATA%\Android\Sdk\platform-tools` and
+   `%USERPROFILE%\AppData\Local\Android\Sdk\platform-tools`.
+
+Every candidate is confirmed with `adb version` before it is accepted; a file
+that exists but cannot launch is skipped in favor of the next candidate, and
+duplicate paths (e.g. `ANDROID_HOME` and `ANDROID_SDK_ROOT` pointing at the
+same SDK) are tried only once.
 
 ADB is **not bundled** with the app — see "Why is ADB not bundled?" below.
 

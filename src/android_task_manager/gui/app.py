@@ -16,7 +16,7 @@ import sys
 from typing import Sequence
 
 from ..adb.connection import ConnectionManager
-from ..adb.discovery import find_adb, is_valid_adb
+from ..adb.discovery import find_adb, is_usable_adb, version_validator
 
 _DEFAULT_INTERVAL = 2.0
 _DEFAULT_MEMORY_INTERVAL = 10.0
@@ -108,7 +108,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     # its thread; the inspection worker reads /proc/<pid> files on its own.
     # ADB is discovered unless the user gave an explicit path; the setup screen
     # can later redirect the shared connection via "Locate ADB".
-    adb_path = find_adb(explicit=args.adb) or args.adb or "adb"
+    adb_path = (
+        find_adb(explicit=args.adb, validator=version_validator(args.timeout))
+        or args.adb
+        or "adb"
+    )
     connection = ConnectionManager(
         adb_path=adb_path,
         timeout=args.timeout,
@@ -141,7 +145,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "",
             "adb executable (adb.exe;adb.bat;adb.cmd;adb)",
         )
-        if chosen and is_valid_adb(chosen):
+        if chosen and is_usable_adb(chosen, version_validator(args.timeout)):
             connection.set_adb_path(str(chosen))
             worker.retry()
 
