@@ -9,6 +9,7 @@ typed exceptions on failure.
 from __future__ import annotations
 
 import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Protocol, Sequence
 
@@ -169,6 +170,13 @@ class ConnectionManager:
                 text=True,
                 timeout=timeout if timeout is not None else self._timeout,
                 check=False,
+                # On Windows every adb call would otherwise flash a console
+                # window (adb.exe is a console-subsystem binary and the
+                # packaged GUI parent is a GUI-subsystem process). The flag is
+                # ignored on POSIX, where adb has no console concept.
+                creationflags=subprocess.CREATE_NO_WINDOW
+                if sys.platform == "win32"
+                else 0,
             )
         except FileNotFoundError as exc:
             raise ADBNotFoundError(

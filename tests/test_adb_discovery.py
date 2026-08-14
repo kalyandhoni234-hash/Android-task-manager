@@ -91,8 +91,16 @@ def test_android_home_fallback(tmp_path: Path) -> None:
 
 def test_localappdata_fallback(tmp_path: Path) -> None:
     local_adb = _make(tmp_path / "local" / "Android" / "Sdk" / "platform-tools" / _ADB)
-    found = find_adb(env=_env(tmp_path))
-    assert found == str(local_adb.resolve())
+    env = _env(tmp_path)
+    if sys.platform == "win32":
+        # %LOCALAPPDATA%/Android/Sdk is a Windows-only adb location.
+        found = find_adb(env=env)
+        assert found == str(local_adb.resolve())
+    else:
+        # On other platforms the Windows SDK env vars must not be consulted:
+        # the same env dict yields no candidate (PATH and ANDROID_HOME are
+        # empty under this test's file layout).
+        assert find_adb(env=env) is None
 
 
 def test_nothing_found_returns_none(tmp_path: Path) -> None:
@@ -147,8 +155,13 @@ def test_userprofile_fallback(tmp_path: Path) -> None:
         "LOCALAPPDATA": str(tmp_path / "missing-local"),
         "USERPROFILE": str(tmp_path / "profile"),
     }
-    found = find_adb(env=env)
-    assert found == str(user_adb.resolve())
+    if sys.platform == "win32":
+        # %USERPROFILE%/AppData/Local/Android/Sdk is a Windows-only location.
+        found = find_adb(env=env)
+        assert found == str(user_adb.resolve())
+    else:
+        # Other platforms must ignore the Windows SDK env vars entirely.
+        assert find_adb(env=env) is None
 
 
 def test_duplicate_candidates_are_checked_once(tmp_path: Path) -> None:
@@ -177,8 +190,15 @@ def test_localappdata_matches_userprofile_appdata_deduplicated(tmp_path: Path) -
         "USERPROFILE": str(tmp_path / "profile"),
     }
     found = find_adb(env=env, validator=lambda p: calls.append(p) or True)
-    assert found == str(user_adb.resolve())
-    assert len(calls) == 1
+    if sys.platform == "win32":
+        # LOCALAPPDATA and USERPROFILE may reference the same directory; the
+        # candidate must be validated exactly once.
+        assert found == str(user_adb.resolve())
+        assert len(calls) == 1
+    else:
+        # Windows-only env vars are ignored on other platforms.
+        assert found is None
+        assert calls == []
 
 
 def test_validator_rejects_skips_to_next_candidate(tmp_path: Path) -> None:
@@ -273,7 +293,13 @@ def test_priority_path_before_sdk_roots_before_localappdata(tmp_path: Path) -> N
     assert find_adb(env=env) == str(sdk_adb.resolve())
 
     env["ANDROID_HOME"] = str(tmp_path / "missing-sdk")
-    assert find_adb(env=env) == str(local_adb.resolve())
+    if sys.platform == "win32":
+        # %LOCALAPPDATA%/Android/Sdk is the Windows-only last resort.
+        assert find_adb(env=env) == str(local_adb.resolve())
+    else:
+        # Non-Windows platforms have no further candidates after PATH and the
+        # SDK root env vars.
+        assert find_adb(env=env) is None
 
 
 def test_is_usable_adb_requires_validator_acceptance(tmp_path: Path) -> None:

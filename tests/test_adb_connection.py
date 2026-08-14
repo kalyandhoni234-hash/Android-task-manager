@@ -105,3 +105,23 @@ def test_get_device_details_tolerates_timeouts(monkeypatch) -> None:
     # The per-property timeout must be short and bounded.
     assert fake.call_kwargs
     assert all(kwargs["timeout"] <= 5.0 for kwargs in fake.call_kwargs)
+
+
+def test_execute_hides_console_for_windows_child_processes(monkeypatch) -> None:
+    import subprocess
+    import sys
+
+    fake = _FakeRun()
+    monkeypatch.setattr("android_task_manager.adb.connection.subprocess.run", fake)
+    connection = ConnectionManager(adb_path="adb")
+    connection.execute(["devices"])
+
+    # adb.exe is a console-subsystem binary; spawned from a GUI-subsystem
+    # parent it would flash a console window on every call unless suppressed.
+    # The creation flag must be CREATE_NO_WINDOW on Windows and 0 elsewhere.
+    assert fake.call_kwargs
+    expected = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    assert fake.call_kwargs[0]["creationflags"] == expected
+
+    # stdout/stderr must stay captured (pipes) regardless of the flag.
+    assert fake.call_kwargs[0]["capture_output"] is True
