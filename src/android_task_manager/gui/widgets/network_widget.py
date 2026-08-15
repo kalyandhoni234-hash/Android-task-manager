@@ -33,6 +33,7 @@ from ...network.models import NetworkSnapshot, NetworkThroughput
 from ...terminal.renderer import format_throughput
 from ..interface_classifier import CATEGORY_ORDER, classify_interface
 from . import panel_host
+from .network_history import NetworkHistoryWidget
 
 
 def _is_active(throughput: NetworkThroughput | None) -> bool:
@@ -65,9 +66,11 @@ class NetworkWidget(QWidget):
 
         self._down = QLabel("N/A")
         self._down.setObjectName("valueBig")
+        self._down.setProperty("mono", True)
         self._down.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         self._up = QLabel("N/A")
         self._up.setObjectName("valueBig")
+        self._up.setProperty("mono", True)
         self._up.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
 
         caption_row = QHBoxLayout()
@@ -79,6 +82,12 @@ class NetworkWidget(QWidget):
 
         layout.addLayout(caption_row)
         layout.addLayout(value_row)
+
+        # Throughput history between the headline rates and the interface
+        # list, fed exclusively from existing snapshot aggregates.
+        self._history = NetworkHistoryWidget()
+        self._history.setMinimumHeight(64)
+        layout.addWidget(self._history)
 
         self._interface_container = QWidget()
         self._rows: list[QWidget] = []
@@ -135,6 +144,9 @@ class NetworkWidget(QWidget):
             agg = snapshot.aggregate_throughput
             self._down.setText(format_throughput(agg.rx_bytes_per_sec))
             self._up.setText(format_throughput(agg.tx_bytes_per_sec))
+            self._history.add_sample(agg.rx_bytes_per_sec, agg.tx_bytes_per_sec)
+        else:
+            self._history.add_sample(None, None)
 
         self._clear_rows()
         if snapshot is None or not snapshot.interfaces:
@@ -202,4 +214,5 @@ class NetworkWidget(QWidget):
     def _muted(text: str) -> QLabel:
         label = QLabel(text)
         label.setObjectName("muted")
+        label.setProperty("mono", True)
         return label

@@ -70,6 +70,24 @@ QTableWidget {
     gridline-color: transparent;
     selection-background-color: #2b3a4d;
     color: #d8dee6;
+    font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+}
+QTableWidget::item:hover {
+    background-color: #242c36;
+}
+QTableWidget::item:selected {
+    background-color: #2b3a4d;
+}
+QLineEdit#processFilter {
+    background-color: #1d232b;
+    border: 1px solid #2a323c;
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: #d8dee6;
+    selection-background-color: #2b3a4d;
+}
+QLineEdit#processFilter:focus {
+    border-color: #3d9be9;
 }
 QPushButton#link {
     color: #3d9be9;
@@ -117,6 +135,15 @@ QPushButton#secondary:disabled {
     background-color: #1d232b;
     color: #5c6672;
     border-color: #232b35;
+}
+QWidget[mono="true"] {
+    font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+}
+QLabel[level="elevated"] {
+    color: #f5a524;
+}
+QLabel[level="high"] {
+    color: #ff5f56;
 }
 QLabel#setupTitle {
     font-size: 26px;

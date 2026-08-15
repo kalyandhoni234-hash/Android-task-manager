@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...cpu.models import CPUCore, CPUSnapshot
+from ..thresholds import apply_metric_level, classify_cpu
 from . import panel_host
 from .cpu_history import CPUHistoryWidget
 
@@ -26,6 +27,7 @@ class CPUWidget(QWidget):
 
         self._overall = QLabel("N/A")
         self._overall.setObjectName("valueBig")
+        self._overall.setProperty("mono", True)
         self._overall.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
 
         self._overall_caption = QLabel("Overall CPU")
@@ -71,6 +73,7 @@ class CPUWidget(QWidget):
             else f"{snapshot.aggregate_utilization_percent:.1f}%"
         )
         self._overall.setText(aggregate)
+        apply_metric_level(self._overall, classify_cpu(snapshot.aggregate_utilization_percent))
         self._history.add_sample(snapshot.aggregate_utilization_percent)
 
         # Rebuild the grid row by row.
@@ -90,9 +93,12 @@ class CPUWidget(QWidget):
                 "N/A" if core.utilization_percent is None else f"{core.utilization_percent:.1f}%"
             )
             pct.setObjectName("caption")
+            pct.setProperty("mono", True)
+            apply_metric_level(pct, classify_cpu(core.utilization_percent))
 
             freq = QLabel(_frequency(core))
             freq.setObjectName("muted")
+            freq.setProperty("mono", True)
 
             self._table.addWidget(label, 0, column_index)
             self._table.addWidget(bar, 1, column_index)

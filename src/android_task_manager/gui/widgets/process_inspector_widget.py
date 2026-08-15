@@ -51,6 +51,15 @@ def _fmt_mem(kib: int | None) -> str:
     return "N/A" if kib is None else format_kib(kib)
 
 
+def _fmt_io(value: int | None) -> str:
+    """Format an I/O byte counter; ``None`` stays "Unavailable" (never 0)."""
+    return "Unavailable" if value is None else f"{value:,} B"
+
+
+#: Explanation for I/O counters Android does not expose to this process.
+_IO_UNAVAILABLE_TOOLTIP = "Unavailable due to Android process permissions."
+
+
 class ProcessInspectorWidget(QWidget):
     """Detail view shown when a process row is selected."""
 
@@ -90,6 +99,7 @@ class ProcessInspectorWidget(QWidget):
             label.setObjectName("caption")
             value = QLabel("N/A")
             value.setObjectName("muted")
+            value.setProperty("mono", True)
             grid.addWidget(label, index, 0)
             grid.addWidget(value, index, 1)
             self._rows[field] = value
@@ -168,15 +178,18 @@ class ProcessInspectorWidget(QWidget):
             "Virtual": _fmt_mem(snapshot.virtual_memory_kb),
             "Resident": _fmt_mem(snapshot.resident_memory_kb),
             "Shared": _fmt_mem(snapshot.shared_memory_kb),
-            "I/O Read": (
-                "N/A" if snapshot.io_read_bytes is None else f"{snapshot.io_read_bytes:,} B"
-            ),
-            "I/O Write": (
-                "N/A" if snapshot.io_write_bytes is None else f"{snapshot.io_write_bytes:,} B"
-            ),
+            "I/O Read": _fmt_io(snapshot.io_read_bytes),
+            "I/O Write": _fmt_io(snapshot.io_write_bytes),
         }
         for field, text in values.items():
             self._rows[field].setText(text)
+
+        self._rows["I/O Read"].setToolTip(
+            _IO_UNAVAILABLE_TOOLTIP if snapshot.io_read_bytes is None else ""
+        )
+        self._rows["I/O Write"].setToolTip(
+            _IO_UNAVAILABLE_TOOLTIP if snapshot.io_write_bytes is None else ""
+        )
 
         if snapshot.command_line:
             self._command_line.setText(f"Command Line\n{snapshot.command_line}")
@@ -200,6 +213,7 @@ class ProcessInspectorWidget(QWidget):
         self._subtitle.setText(detail)
         for value in self._rows.values():
             value.setText("N/A")
+            value.setToolTip("")
         self._command_line.hide()
         self._last_snapshot = None
         self._resolved_package = None

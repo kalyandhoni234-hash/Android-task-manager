@@ -7,6 +7,7 @@ snapshot delivery and the monitor worker are testable headlessly.
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -33,11 +34,14 @@ from android_task_manager.gui.inspector_worker import ProcessInspectionWorker
 from android_task_manager.gui.monitor import ConnectionState, MonitorWorker
 from android_task_manager.gui.styles import DARK_STYLE
 from android_task_manager.gui.widgets.battery_widget import BatteryWidget
+from android_task_manager.gui.widgets.battery_history import BatteryHistoryWidget
 from android_task_manager.gui.widgets.cpu_history import CPUHistoryWidget
 from android_task_manager.gui.widgets.cpu_widget import CPUWidget
 from android_task_manager.gui.widgets.device_widget import DeviceWidget
 from android_task_manager.gui.widgets.memory_widget import MemoryWidget
+from android_task_manager.gui.widgets.memory_history import MemoryHistoryWidget
 from android_task_manager.gui.widgets.network_widget import NetworkWidget
+from android_task_manager.gui.widgets.network_history import NetworkHistoryWidget
 from android_task_manager.gui.widgets.process_widget import ProcessWidget
 from android_task_manager.memory.models import MemorySnapshot
 from android_task_manager.network.models import (
@@ -296,6 +300,86 @@ def test_cpu_widget_feeds_history_from_snapshot(qtapp) -> None:
     assert widget._history.samples == [12.4]
 
 
+def test_memory_history_retains_and_bounds_samples(qtapp) -> None:
+    history = MemoryHistoryWidget(max_samples=5)
+    for index in range(1, 9):
+        history.add_sample(float(index))
+    assert history.samples == [4.0, 5.0, 6.0, 7.0, 8.0]
+
+
+def test_memory_history_skips_none_samples(qtapp) -> None:
+    history = MemoryHistoryWidget()
+    history.add_sample(None)
+    assert history.samples == []
+    history.add_sample(29.4)
+    history.add_sample(None)
+    assert history.samples == [29.4]
+
+
+def test_memory_widget_feeds_history_available_share(qtapp) -> None:
+    widget = MemoryWidget()
+    assert widget._history.samples == []
+    widget.set_snapshot(memory_snapshot())
+    # 842_000 / 2_865_476 kB available -> the same baseline the headline shows.
+    assert widget._history.samples == [pytest.approx(842_000 / 2_865_476 * 100)]
+
+
+def test_network_history_tracks_download_and_upload(qtapp) -> None:
+    history = NetworkHistoryWidget()
+    history.add_sample(2_000_000.0, 500_000.0)
+    history.add_sample(1_000_000.0, 250_000.0)
+    assert history.download_samples == [2_000_000.0, 1_000_000.0]
+    assert history.upload_samples == [500_000.0, 250_000.0]
+
+
+def test_network_history_skips_none_per_series(qtapp) -> None:
+    history = NetworkHistoryWidget()
+    history.add_sample(None, 42.0)
+    assert history.download_samples == []
+    assert history.upload_samples == [42.0]
+
+
+def test_network_history_zero_traffic_and_bounded_window(qtapp) -> None:
+    history = NetworkHistoryWidget(max_samples=5)
+    for _ in range(9):
+        history.add_sample(0.0, 0.0)
+    assert history.download_samples == [0.0] * 5
+    assert history.upload_samples == [0.0] * 5
+    history._plot.grab()  # a zero-only window must still paint
+
+
+def test_network_widget_feeds_history_from_aggregate(qtapp) -> None:
+    widget = NetworkWidget()
+    widget.set_snapshot(None)
+    assert widget._history.download_samples == []
+    widget.set_snapshot(network_snapshot())
+    assert widget._history.download_samples == [2_097_152.0]
+    assert widget._history.upload_samples == [380_000.0]
+
+
+def test_battery_history_tracks_and_bounds_level(qtapp) -> None:
+    history = BatteryHistoryWidget(max_samples=4)
+    for index in range(1, 7):
+        history.add_sample(float(index))
+    assert history.samples == [3.0, 4.0, 5.0, 6.0]
+
+
+def test_battery_history_skips_none_samples(qtapp) -> None:
+    history = BatteryHistoryWidget()
+    history.add_sample(None)
+    history.add_sample(38.0)
+    assert history.samples == [38.0]
+
+
+def test_battery_widget_feeds_history_from_level(qtapp) -> None:
+    widget = BatteryWidget()
+    assert widget._history.samples == []
+    widget.set_snapshot(battery_snapshot())
+    assert widget._history.samples == [38.0]
+    widget.set_snapshot(None)
+    assert widget._history.samples == [38.0]  # no fabricated sample on teardown
+
+
 def test_memory_widget_receives_snapshot(qtapp) -> None:
     widget = MemoryWidget()
     widget.set_snapshot(memory_snapshot())
@@ -337,6 +421,57 @@ def test_battery_compact_layout_renders(qtapp) -> None:
     assert widget._bar.value() == 38
     for field in ("Temperature", "Voltage", "Technology", "Power"):
         assert widget._fields[field].text() != "N/A"
+
+
+def test_cpu_widget_colors_threshold_levels(qtapp) -> None:
+    widget = CPUWidget()
+    busy = CPUSnapshot(
+        timestamp=1.0,
+        aggregate_utilization_percent=90.0,
+        cores=[
+            CPUCore(core_id=0, utilization_percent=12.0, frequency_khz=1_750_000, frequency_available=True),
+            CPUCore(core_id=1, utilization_percent=70.0, frequency_khz=None, frequency_available=False),
+        ],
+    )
+    widget.set_snapshot(busy)
+    assert widget._overall.property("level") == "high"
+    assert widget._overall.property("mono") is True
+    label, _bar, pct, freq = widget._core_rows[0]
+    assert pct.property("level") == "normal"
+    assert freq.property("mono") is True
+    label, _bar, pct, freq = widget._core_rows[1]
+    assert pct.property("level") == "elevated"
+
+
+def test_memory_widget_colors_used_pressure(qtapp) -> None:
+    widget = MemoryWidget()
+    widget.set_snapshot(memory_snapshot())  # 71% used -> Elevated (amber).
+    assert widget._used.property("level") == "elevated"
+    assert widget._available.property("mono") is True
+    widget.set_snapshot(None)
+    assert widget._used.property("level") == "normal"
+
+
+def test_battery_widget_colors_temperature(qtapp) -> None:
+    widget = BatteryWidget()
+    widget.set_snapshot(battery_snapshot())  # 34.1 C -> Normal.
+    assert widget._fields["Temperature"].property("level") == "normal"
+    widget.set_snapshot(replace(battery_snapshot(), temperature_c=46.0))
+    assert widget._fields["Temperature"].property("level") == "high"
+
+
+def test_metric_widgets_use_mono_typography(qtapp) -> None:
+    cpu = CPUWidget()
+    assert cpu._overall.property("mono") is True
+    memory = MemoryWidget()
+    assert memory._available.property("mono") is True
+    assert memory._rows["Total"].property("mono") is True
+    battery = BatteryWidget()
+    assert battery._level.property("mono") is True
+    assert battery._fields["Voltage"].property("mono") is True
+    network = NetworkWidget()
+    assert network._down.property("mono") is True
+    assert network._up.property("mono") is True
 
 
 def test_process_widget_receives_snapshot_sorted_by_cpu_desc(qtapp) -> None:
@@ -625,6 +760,26 @@ def test_window_renders_inspection_snapshot_with_metrics(qtapp) -> None:
     assert panel._rows["Threads"].text() == "42"
     assert panel._rows["I/O Read"].text() == "67,890 B"
     assert "Command Line" in panel._command_line.text()
+
+
+def test_inspection_io_unavailable_is_explicit_not_zero(qtapp) -> None:
+    window = MainWindow()
+    window.update_snapshots(
+        cpu_snapshot(), memory_snapshot(), process_snapshot(), battery_snapshot(), network_snapshot()
+    )
+    window.on_inspection_ready(
+        ProcessInspectionSnapshot(
+            pid=8150, name="com.heavy.app", timestamp=1.0, io_read_bytes=None, io_write_bytes=None
+        )
+    )
+    panel = window.processes._inspector
+    # The device denied reading /proc/<pid>/io; the UI must say so explicitly
+    # rather than fabricate a "0 B" counter, and the reason is one hover away.
+    assert panel._rows["I/O Read"].text() == "Unavailable"
+    assert panel._rows["I/O Write"].text() == "Unavailable"
+    assert panel._rows["I/O Read"].toolTip() != ""
+    assert panel._rows["I/O Write"].toolTip() == panel._rows["I/O Read"].toolTip()
+    assert panel._rows["Shared"].property("mono") is True
 
 
 def test_window_renders_process_gone_state(qtapp) -> None:

@@ -6,7 +6,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QVBoxLayout, QWidget
 
 from ...battery.models import BatterySnapshot
+from ..thresholds import MetricLevel, apply_metric_level, classify_temperature
 from . import panel_host
+from .battery_history import BatteryHistoryWidget
 
 
 class BatteryWidget(QWidget):
@@ -18,6 +20,7 @@ class BatteryWidget(QWidget):
 
         self._level = QLabel("N/A")
         self._level.setObjectName("valueBig")
+        self._level.setProperty("mono", True)
 
         self._status = QLabel()
         self._status.setObjectName("statusConnected")
@@ -36,6 +39,10 @@ class BatteryWidget(QWidget):
         self._bar.setRange(0, 100)
         self._bar.setFixedHeight(10)
 
+        # Level history under the bar: modest window, direction over detail.
+        self._history = BatteryHistoryWidget()
+        self._history.setMinimumHeight(56)
+
         self._fields: dict[str, QLabel] = {}
         fields_row = QHBoxLayout()
         fields_row.setSpacing(18)
@@ -44,6 +51,7 @@ class BatteryWidget(QWidget):
             label.setObjectName("muted")
             value = QLabel("N/A")
             value.setObjectName("caption")
+            value.setProperty("mono", True)
             fields_row.addWidget(label)
             fields_row.addWidget(value)
             self._fields[field] = value
@@ -51,6 +59,7 @@ class BatteryWidget(QWidget):
 
         layout.addLayout(head)
         layout.addWidget(self._bar)
+        layout.addWidget(self._history)
         layout.addLayout(fields_row)
         layout.addStretch(1)
 
@@ -65,6 +74,8 @@ class BatteryWidget(QWidget):
             self._bar.setValue(0)
             for value in self._fields.values():
                 value.setText("N/A")
+            apply_metric_level(self._fields["Temperature"], MetricLevel.NORMAL)
+            self._history.add_sample(None)
             return
 
         level = (
@@ -84,7 +95,11 @@ class BatteryWidget(QWidget):
         self._status.setText(snapshot.status.label if snapshot.status else "Unknown")
         self._health.setText(snapshot.health.label if snapshot.health else "Unknown")
         self._bar.setValue(int(round(snapshot.level_percent or 0)))
+        self._history.add_sample(snapshot.level_percent)
         self._fields["Temperature"].setText(temperature)
+        apply_metric_level(
+            self._fields["Temperature"], classify_temperature(snapshot.temperature_c)
+        )
         self._fields["Voltage"].setText(voltage)
         self._fields["Technology"].setText(snapshot.technology or "Unknown")
         self._fields["Power"].setText(_power_sources(snapshot))
