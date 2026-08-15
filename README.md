@@ -81,6 +81,14 @@ Monitoring is **read-only**. The tool never writes to the device; the three devi
 - Sockets are attributed to the selected process **by its UID**, resolved against the exact packages sharing that UID (`pm list packages -U`). This is deliberately **not** PID-level attribution: Android exposes no per-socket PID to a non-root process, so the tool says that instead of guessing. See `docs/m14-network-research.md` for the research behind this.
 - Each table is read independently: a permission failure on one table never hides the sockets visible in the others, and each readable-source state is reported. When the device refuses the socket reads entirely, the section explains that rather than fabricating data.
 
+### 📋 Automated Incident Reporting *(GUI)*
+
+- **Generate Report** — one click aggregates the session into a deterministic, evidence-backed investigation artifact: findings (drift events, heuristic signals, permission combination flags), evidence rows (processes, sockets, packages, permission audits), a chronological timeline, severity counts and an overall assessment (`REVIEW REQUIRED` / `REVIEW RECOMMENDED` / `INFORMATIONAL` / `NO SIGNIFICANT FINDINGS`).
+- **Export JSON / HTML / PDF** — the same self-contained HTML feeds the viewer dialog and the PDF writer; JSON is canonical and deterministic. Every export writes off the GUI thread and always reports back.
+- **An investigation artifact, never a verdict.** The report preserves the existing analysis layers' own wording, never concludes "malware"/"compromised", and recommends *investigation steps only* — no uninstall/disable/kill/delete. Unavailable data renders as "Unavailable", never a fabricated zero; every timeline entry carries a real timestamp.
+- **Evidence integrity** — every report carries a SHA-256 of its canonical payload (stdlib `hashlib`, no cryptography dependency) to detect accidental change.
+- See `docs/adr-0001-incident-reporting.md` for the design decisions (no LLM, read-only by construction, severity semantics, PDF placement).
+
 ### 🔌 ADB & Device Handling
 
 - Automatic **ADB discovery** (see [ADB discovery](#-adb-discovery)) with `adb version` validation of every candidate.
@@ -141,7 +149,7 @@ The key architectural rule: **collectors never invoke `subprocess` directly.** A
 | Device bridge | ADB (`adb shell`) | not bundled (see [Why is ADB not bundled?](#why-is-adb-not-bundled)) |
 | Term renderer | custom, dependency-light | `terminal/renderer.py` |
 | Windows packaging | PyInstaller ≥ 6 | one-file windowed + debug builds |
-| Tests | pytest ≥ 7 | 483 tests, fixture-driven, GUI headless |
+| Tests | pytest ≥ 7 | 734 tests, fixture-driven, GUI headless |
 | CI/CD | GitHub Actions | Linux matrix (3.10–3.12) + Windows release build |
 | Product site | Next.js 16 (static export) | hosted on GitHub Pages |
 
@@ -160,12 +168,15 @@ android-task-manager/
 │   ├── process/                      # ps identity + top metrics, classification, and the
 │   │                                 #   read-only /proc/<pid> inspector (inspector_* modules)
 │   ├── network_investigation/        # socket tables (tcp{,6},udp{,6}) + UID attribution
+│   ├── incident/                     # incident report: models (schema) · builder
+│   │                                 #   (deterministic aggregation) · renderers (JSON/HTML)
 │   ├── action/                       # package verification + Open App / App Info / Force Stop
 │   ├── terminal/                     # dependency-light text renderer
-│   ├── gui/                          # PySide6 dashboard: widgets/, workers, styles,
-│   │                                 #   setup panel, entry point (app.py -> main)
+│   ├── gui/                          # PySide6 dashboard: widgets/, workers (incl. incident
+│   │                                 #   export worker + PDF writer), styles, setup panel,
+│   │                                 #   entry point (app.py -> main)
 │   └── main.py                       # terminal entry point / sample loop
-├── tests/                            # 483 pytest tests (18 modules), fixed-device fixtures
+├── tests/                            # 734 pytest tests (33 modules), fixed-device fixtures
 ├── packaging/                        # build_windows.ps1, icon + version-resource assets,
 │   │                                 #   entry stubs (entry_gui.py / entry_console.py)
 ├── docs/                             # engineering research (e.g. m14-network-research.md)
@@ -265,6 +276,8 @@ The GUI accepts the same `--adb`, `--device`, `--interval`, `--process-interval`
 - **CPU** — overall utilization, the recent-history graph, one bar per core with frequency.
 - **Memory** — available memory as the headline figure, a used-share bar, Total / Free / Cached / Buffers breakdown, history graph.
 - **Processes** — table (PID, CPU, MEM, STATE, NAME) sorted by CPU, with filtering/sorting, classification, and the selectable **Process Inspector** panel (details + Network Connections).
+- **Baseline & Security** — baseline capture, drift check with suspicious-signal section, and session export (JSON/CSV).
+- **Incident Reporting** — generate, view (dialog with HTML preview) and export (JSON/HTML/PDF) the investigation report.
 - **Battery** — level, status, health, temperature/voltage/technology/power source, history graph.
 - **Network** — download/upload throughput, interface list grouped by type (active by default), history graph.
 
@@ -276,7 +289,7 @@ Before the dashboard appears, the **connection-setup screen** is shown whenever 
 python -m pytest
 ```
 
-The suite: **483 tests across 18 modules** (`tests/`), covering the parsers (CPU, memory, process, battery, network), delta calculations, collectors, the ADB discovery/connection layers, the package-identity resolver/service, the network investigation, and the GUI (widgets, setup flow, actions, workers).
+The suite: **734 tests across 33 modules** (`tests/`), covering the parsers (CPU, memory, process, battery, network), delta calculations, collectors, the ADB discovery/connection layers, the package-identity resolver/service, the network investigation, the incident report layer (builder, JSON/HTML renderers, GUI panel/dialog/worker), and the GUI (widgets, setup flow, actions, workers).
 
 - Runs entirely against **fixed fixtures based on verified Vivo V2026 output — no physical device required**.
 - **GUI tests run headlessly** via Qt's `offscreen` platform plugin (`QT_QPA_PLATFORM=offscreen`): they construct widgets, deliver snapshots, drive the monitor worker, and cover the first-run setup flow (each connection state, the multi-device picker, ADB discovery) without a display.

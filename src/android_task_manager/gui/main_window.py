@@ -28,12 +28,17 @@ from ..baseline import (
 from ..battery.models import BatterySnapshot
 from ..cpu.models import CPUSnapshot
 from ..heuristics import HeuristicReport
+from ..incident.builder import build_incident_report
+from ..incident.models import SOURCE_GUI, IncidentReport
+from ..incident.renderers import report_filename
 from ..memory.models import MemorySnapshot
 from ..network.models import NetworkSnapshot
 from ..network_investigation.models import NetworkInvestigationSnapshot
+from ..permissions.models import PackagePermissionAudit
 from ..process.inspector_models import ProcessInspectionSnapshot
 from ..process.models import ProcessSnapshot
 from ..updater import UpdateCheckResult
+from .incident_dialog import IncidentDialog
 from .monitor import ConnectionState, MonitorWorker
 from .setup_panel import INSTALL_ADB_STEPS, USB_DEBUGGING_STEPS, SetupPanel
 from .update_banner import UpdateBanner
@@ -41,6 +46,7 @@ from .widgets.baseline_panel import BaselinePanel
 from .widgets.battery_widget import BatteryWidget
 from .widgets.cpu_widget import CPUWidget
 from .widgets.device_widget import DeviceWidget
+from .widgets.incident_panel import IncidentPanel
 from .widgets.memory_widget import MemoryWidget
 from .widgets.network_widget import NetworkWidget
 from .widgets.process_widget import ProcessWidget
@@ -81,6 +87,9 @@ class MainWindow(QMainWindow):
     #: (package) the user asked to audit a resolved package's permissions.
     permission_audit_requested = Signal(str)
 
+    #: (kind, path, IncidentReport) the user picked an incident-report target.
+    incident_export_requested = Signal(str, str, object)
+
     #: The user's session started; the app runs the one-shot update check.
     update_check_requested = Signal()
 
@@ -105,6 +114,7 @@ class MainWindow(QMainWindow):
         self.battery = BatteryWidget()
         self.network = NetworkWidget()
         self.security = BaselinePanel()
+        self.incident = IncidentPanel()
 
         #: Most recent ProcessSnapshot, kept so inspection results can be
         #: associated with the matching ProcessInfo (cpu/memory percent).
@@ -125,6 +135,16 @@ class MainWindow(QMainWindow):
         self._current_snapshot: BaselineSnapshot | None = None
         self._drift_report: DriftReport | None = None
 
+        #: Incident reporting GUI-layer state: the last heuristic report,
+        #: the permission audits seen so far (bounded), the generated report
+        #: and the (lazily created) viewer dialog.
+        self._heuristics: HeuristicReport | None = None
+        self._permission_audits: list[PackagePermissionAudit] = []
+        self._incident_report: IncidentReport | None = None
+        self._incident_dialog: IncidentDialog | None = None
+        self._device_label: str | None = None
+        self._android_version: str | None = None
+
         self.processes.inspection_requested.connect(self.inspect_requested.emit)
         self.processes.inspector.action_requested.connect(self._on_action_clicked)
         self.security.save_requested.connect(self._on_security_save_requested)
@@ -133,6 +153,9 @@ class MainWindow(QMainWindow):
         self.processes.inspector.permission_audit_requested.connect(
             self.permission_audit_requested.emit
         )
+        self.incident.generate_requested.connect(self._on_incident_generate_requested)
+        self.incident.view_requested.connect(self._on_incident_view_requested)
+        self.incident.export_requested.connect(self._on_incident_export_requested)
 
         top_row = QHBoxLayout()
         top_row.addWidget(self.cpu, 1)
@@ -150,6 +173,7 @@ class MainWindow(QMainWindow):
         content.addLayout(top_row)
         content.addWidget(self.processes, 1)
         content.addWidget(self.security)
+        content.addWidget(self.incident)
         content.addLayout(bottom_row)
 
         container = QWidget()
@@ -190,6 +214,8 @@ class MainWindow(QMainWindow):
             self.network.set_snapshot(network)
 
     def update_device(self, label: str, android_version: str) -> None:
+        self._device_label = label
+        self._android_version = android_version
         self.device.set_info(label, android_version)
 
     def update_network_investigation(
@@ -303,6 +329,17 @@ class MainWindow(QMainWindow):
         self.security.set_baseline(snapshot)
         self.processes.set_new_process_refs(frozenset())
         self.processes.inspector.set_new_socket_identities(frozenset())
+        self._reset_incident_state()
+
+    def _reset_incident_state(self) -> None:
+        """A fresh baseline invalidates every incident artifact honestly:
+        the report, the viewer and the underlying session data are cleared
+        until the next drift check."""
+        self._heuristics = None
+        self._permission_audits = []
+        self._incident_report = None
+        self.incident.set_report(None)
+        self.incident.set_generation_available(False)
 
     def on_baseline_failed(self, message: str) -> None:
         self.security.show_save_failed(message)
@@ -317,7 +354,9 @@ class MainWindow(QMainWindow):
         existing process table and the inspector's socket table."""
         self._current_snapshot = current
         self._drift_report = report
+        self._heuristics = heuristics
         self.security.show_drift(report, heuristics)
+        self.incident.set_generation_available(True)
         if self._baseline is None:
             return
         self.processes.set_new_process_refs(
@@ -375,12 +414,98 @@ class MainWindow(QMainWindow):
         self.baseline_export_requested.emit(kind, path, session)
 
     def on_permission_audit_ready(self, audit) -> None:
-        """Render an audit result in the inspector (stale results are
-        discarded there by package match)."""
+        """Render an audit result in the inspector and keep a bounded record
+        of recent audits for the incident report."""
         self.processes.inspector.show_permission_audit(audit)
+        self._permission_audits.append(audit)
+        if len(self._permission_audits) > 20:
+            del self._permission_audits[:-20]
 
     def on_permission_audit_failed(self, package: str, message: str) -> None:
         self.processes.inspector.show_permission_audit_failed(package, message)
+
+    # ------------------------------------------------------------------
+    # Incident reporting handlers (GUI thread; build + exports)
+    # ------------------------------------------------------------------
+
+    def _on_incident_generate_requested(self) -> None:
+        """Build a report from the current session data on the GUI thread.
+
+        Generation is a pure, fast, deterministic aggregation of
+        already-collected data — no device I/O, so it needs no worker. The
+        report is dated by the generation moment (which is honest: that is
+        when it was produced).
+        """
+        if self._baseline is None or self._current_snapshot is None or self._drift_report is None:
+            self.incident.set_generating(False)
+            return
+        self.incident.set_generating(True)
+        session = Session(
+            baseline=self._baseline,
+            current=self._current_snapshot,
+            drift_report=self._drift_report,
+        )
+        report = build_incident_report(
+            session=session,
+            heuristics=self._heuristics,
+            permission_audits=tuple(self._permission_audits),
+            network_investigation=self._latest_network_investigation,
+            process_snapshot=self._latest_processes,
+            source=SOURCE_GUI,
+            device_label=self._device_label,
+            android_version=self._android_version,
+        )
+        self._incident_report = report
+        self.incident.set_report(report)
+
+    def _on_incident_view_requested(self) -> None:
+        """Open (or refresh) the report viewer dialog with the latest report."""
+        if self._incident_report is None:
+            return
+        if self._incident_dialog is None:
+            self._incident_dialog = IncidentDialog(self)
+            self._incident_dialog.export_requested.connect(
+                self._on_incident_export_requested
+            )
+        self._incident_dialog.show_report(self._incident_report)
+        self._incident_dialog.show()
+        self._incident_dialog.raise_()
+        self._incident_dialog.activateWindow()
+
+    def _on_incident_export_requested(self, kind: str) -> None:
+        """Ask for a file target, then hand the report to the worker.
+
+        A cancelled dialog is reported as such — the user never wonders
+        whether an export ran. File writing happens on the worker thread,
+        never on the GUI thread.
+        """
+        if self._incident_report is None:
+            return
+        report = self._incident_report
+        default_name = report_filename(report.metadata.generated_at, kind)
+        filters = {
+            "json": "JSON file (*.json)",
+            "html": "HTML file (*.html)",
+            "pdf": "PDF file (*.pdf)",
+        }
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export incident report",
+            default_name,
+            filters.get(kind, "All files (*)"),
+        )
+        if not path:
+            self.incident.show_export_cancelled()
+            return
+        self.incident.set_export_busy(True)
+        if self._incident_dialog is not None:
+            self._incident_dialog.set_export_busy(True)
+        self.incident_export_requested.emit(kind, path, report)
+
+    def on_incident_export_completed(self, success: bool, message: str) -> None:
+        self.incident.show_export_result(success, message)
+        if self._incident_dialog is not None:
+            self._incident_dialog.show_export_result(success, message)
 
     # ------------------------------------------------------------------
     # Update check (one-shot, background worker, silent failures)
@@ -458,6 +583,17 @@ def wire_security(window: MainWindow, worker) -> None:
     worker.drift_checked.connect(window.on_drift_checked)
     worker.drift_failed.connect(window.on_drift_failed)
     worker.export_completed.connect(window.on_export_completed)
+
+
+def wire_incident(window: MainWindow, worker) -> None:
+    """Connect the IncidentWorker's signals to the window.
+
+    Report generation stays on the GUI thread (pure aggregation); only the
+    file exports are handed to the worker. Results come back over queued
+    connections; the GUI thread only renders.
+    """
+    window.incident_export_requested.connect(worker.request_export)
+    worker.export_completed.connect(window.on_incident_export_completed)
 
 
 def wire_permissions(window: MainWindow, worker) -> None:

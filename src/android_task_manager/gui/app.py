@@ -98,6 +98,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         from .action_worker import ActionWorker
         from .baseline_worker import BaselineWorker
+        from .incident_worker import IncidentWorker
         from .inspector_worker import ProcessInspectionWorker
         from .permission_worker import PermissionWorker
         from .update_worker import UpdateWorker
@@ -106,6 +107,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             MainWindow,
             wire,
             wire_actions,
+            wire_incident,
             wire_inspector,
             wire_permissions,
             wire_security,
@@ -153,12 +155,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     actions = ActionWorker(connection=connection, timeout=args.timeout)
     baseline_worker = BaselineWorker(connection=connection, timeout=args.timeout)
     permission_worker = PermissionWorker(connection=connection, timeout=args.timeout)
+    incident_worker = IncidentWorker()
     update_worker = UpdateWorker(current_version=__version__)
     wire(window, worker)
     wire_inspector(window, inspector)
     wire_actions(window, worker, actions)
     wire_security(window, baseline_worker)
     wire_permissions(window, permission_worker)
+    wire_incident(window, incident_worker)
     wire_updates(window, update_worker)
 
     # First-run setup flow: the window asks; the shared connection + worker
@@ -209,6 +213,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     permission_thread = QThread()
     permission_worker.moveToThread(permission_thread)
 
+    incident_thread = QThread()
+    incident_worker.moveToThread(incident_thread)
+
     update_thread = QThread()
     update_worker.moveToThread(update_thread)
 
@@ -224,6 +231,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         baseline_thread.wait(3000)
         permission_thread.quit()
         permission_thread.wait(3000)
+        incident_thread.quit()
+        incident_thread.wait(3000)
         update_thread.quit()
         update_thread.wait(3000)
 
@@ -234,6 +243,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     actions_thread.start()
     baseline_thread.start()
     permission_thread.start()
+    incident_thread.start()
     update_thread.start()
     window.show()
     return app.exec()

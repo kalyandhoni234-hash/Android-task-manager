@@ -49,7 +49,7 @@ const FAQ_ITEMS = [
   },
   {
     q: "Where is the source code?",
-    a: "On GitHub, MIT licensed — including 483 automated tests that run headlessly in CI on Python 3.10/3.11/3.12.",
+    a: "On GitHub, MIT licensed — including 734 automated tests that run headlessly in CI on Python 3.10/3.11/3.12.",
   },
 ];
 
