@@ -14,7 +14,7 @@ const FEATURES = [
   {
     label: "Processes",
     title: "Sorted, classified, live",
-    body: "Monitor CPU and memory usage across Android processes.",
+    body: "Monitor CPU and memory usage across Android processes, with sorting and filtering.",
     stat: "ps + top",
   },
   {
@@ -24,16 +24,28 @@ const FEATURES = [
     stat: "/proc/<pid>",
   },
   {
+    label: "Network",
+    title: "Throughput by interface",
+    body: "Monitor upload/download throughput, interface activity and active-interface filtering.",
+    stat: "/proc/net/dev",
+  },
+  {
     label: "Battery",
     title: "More than a percentage",
-    body: "Monitor battery level, charging state, temperature and voltage.",
+    body: "Monitor battery level, charging state, health, temperature, voltage and technology.",
     stat: "dumpsys battery",
   },
   {
-    label: "Network",
-    title: "Throughput by interface",
-    body: "Monitor upload/download throughput and interface activity.",
-    stat: "/proc/net/dev",
+    label: "Network Investigation",
+    title: "TCP and UDP, per UID",
+    body: "Live socket tables: TCP/UDP over IPv4/IPv6, with connections attributed to the owning Android UID and its verified packages.",
+    stat: "/proc/net/tcp*",
+  },
+  {
+    label: "Device Actions",
+    title: "Open App · App Info · Force Stop",
+    body: "Targeted actions against a selected app — no kill-all, no data clearing, no restarts.",
+    stat: "verified packages",
   },
 ];
 

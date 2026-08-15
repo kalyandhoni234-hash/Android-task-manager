@@ -1,4 +1,4 @@
-import { GITHUB_URL } from "@/lib/constants";
+import { GITHUB_RELEASES_URL, GITHUB_URL } from "@/lib/constants";
 
 export function OpenSource() {
   return (
@@ -14,18 +14,29 @@ export function OpenSource() {
             </h2>
             <p className="mt-3 text-base leading-relaxed text-text-secondary">
               The source, architecture and tests are available on GitHub —
-              MIT licensed.
+              MIT licensed. Release assets (EXE + SHA-256) are published
+              through GitHub Releases.
             </p>
           </div>
 
-          <a
-            href={GITHUB_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex shrink-0 items-center gap-2 rounded-md border border-border-strong px-5 py-3 text-sm font-medium text-text-primary transition-colors hover:border-accent-border hover:bg-bg-raised"
-          >
-            View source on GitHub
-          </a>
+          <div className="flex shrink-0 flex-col gap-3 sm:flex-row">
+            <a
+              href={GITHUB_RELEASES_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center justify-center gap-2 rounded-md bg-accent px-5 py-3 text-sm font-medium text-white transition-colors hover:bg-accent-strong"
+            >
+              Release notes
+            </a>
+            <a
+              href={GITHUB_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center justify-center gap-2 rounded-md border border-border-strong px-5 py-3 text-sm font-medium text-text-primary transition-colors hover:border-accent-border hover:bg-bg-raised"
+            >
+              View source on GitHub
+            </a>
+          </div>
         </div>
       </div>
     </section>

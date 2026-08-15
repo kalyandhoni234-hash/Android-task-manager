@@ -28,7 +28,7 @@ export function Footer() {
           >
             MIT License
           </a>
-          <span>Read-only monitoring. No accounts.</span>
+          <span>Monitoring + device actions · No accounts</span>
         </div>
       </div>
     </footer>

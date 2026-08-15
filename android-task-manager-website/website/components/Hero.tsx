@@ -2,6 +2,11 @@ import { ScreenshotFrame } from "./ScreenshotFrame";
 import { Sparkline } from "./Sparkline";
 import { GITHUB_URL } from "@/lib/constants";
 
+const FEATURE_LINES = [
+  "CPU · Memory · Processes · Network · Battery",
+  "Process Inspector · Device Actions · Network Investigation",
+];
+
 export function Hero() {
   return (
     <section
@@ -17,7 +22,7 @@ export function Hero() {
               className="h-1.5 w-1.5 animate-blink rounded-full bg-accent"
               aria-hidden="true"
             />
-            Windows 10/11 · Open Source · Read-only monitoring
+            Windows (64-bit) · Open Source · No Python required
           </div>
 
           <h1 className="font-display text-balance text-4xl font-semibold leading-[1.08] tracking-tight text-text-primary sm:text-5xl lg:text-[3.4rem]">
@@ -27,9 +32,21 @@ export function Hero() {
           </h1>
 
           <p className="mt-6 max-w-lg text-lg leading-relaxed text-text-secondary">
-            Real-time CPU, memory, process, battery and network monitoring
-            through ADB — presented in a focused desktop dashboard.
+            Desktop-grade monitoring and process investigation for Android —
+            CPU, memory, processes, network and battery, gathered through ADB
+            and presented in a focused desktop dashboard.
           </p>
+
+          <div className="mt-6 flex flex-col gap-1.5">
+            {FEATURE_LINES.map((line) => (
+              <span
+                key={line}
+                className="font-mono text-xs tracking-wide text-text-tertiary"
+              >
+                {line}
+              </span>
+            ))}
+          </div>
 
           <div className="mt-9 flex flex-col gap-3 sm:flex-row sm:items-center">
             <a
@@ -57,9 +74,9 @@ export function Hero() {
         </div>
 
         <ScreenshotFrame
-          src={undefined}
+          src="/screenshots/dashboard.png"
           alt="Android Task Manager desktop dashboard showing CPU, memory, process and battery panels"
-          label="dashboard.png — main GUI dashboard (CPU / memory / processes / battery / network)"
+          label="dashboard.png — real capture of the main GUI dashboard (CPU / memory / processes / battery / network)"
           priority
         />
       </div>

@@ -1,11 +1,13 @@
 # Android Task Manager — product website
 
-Marketing / product site for
+Product / download site for
 [Android Task Manager](https://github.com/kalyandhoni234-hash/Android-task-manager),
-a read-only Android system monitor for Windows 10/11 x64 that talks to the
-device over ADB.
+an Android system monitor for Windows (64-bit) that talks to the device over
+ADB. The site is the user-facing download experience: the primary CTA links
+directly to the versioned Windows EXE published as a GitHub Release asset.
 
-Built with Next.js (App Router), React, TypeScript and Tailwind CSS.
+Built with Next.js (App Router, static export), React, TypeScript and
+Tailwind CSS.
 
 ## Development
 
@@ -23,12 +25,28 @@ npm run lint
 npm run build
 ```
 
-## Deployment notes
+`npm run build` produces a fully static export in `out/` (see
+`next.config.ts`), ready for GitHub Pages.
 
-- No production domain is deployed yet. The site intentionally emits no
-  absolute canonical / Open Graph URLs. Set `SITE_URL` (e.g.
-  `https://android-task-manager.example`) when deploying to opt in.
-- The download CTA points at the GitHub repository: no public release asset
-  exists yet. There is an intentional placeholder state in
-  `components/ScreenshotFrame.tsx` — real application screenshots will be
-  added later as PNGs under `public/screenshots/` and passed as `src` props.
+## Deployment
+
+The site deploys to GitHub Pages
+(`https://kalyandhoni234-hash.github.io/Android-task-manager/`) via
+`.github/workflows/deploy-pages.yml` (push to `master` touching
+`android-task-manager-website/website/**`, or `workflow_dispatch`). The
+`basePath` in `next.config.ts` matches the Pages subdirectory; the canonical
+SITE_URL in `lib/constants.ts` points at the Pages URL and can be overridden
+with the `SITE_URL` build-time environment variable when a custom domain is
+added.
+
+## Release facts
+
+The download section's version / file size / SHA-256 come from
+`lib/constants.ts` and are filled in from the exact artifact of the current
+GitHub Release (built by `.github/workflows/release.yml`) — never from a
+local build. `TEST_COUNT` is updated from an actual
+`python -m pytest --collect-only -q` run.
+
+Screenshots: real application screenshots are added as PNGs under
+`public/screenshots/` and passed as `src` props into `ScreenshotFrame`.
+Until then, each slot renders an honest "screenshot pending" placeholder.

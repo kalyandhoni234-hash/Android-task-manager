@@ -43,3 +43,27 @@ jobs:
 
       - name: Verify package builds
         run: python -m build --outdir dist
+
+  website:
+    name: Website (lint + static build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android-task-manager-website/website
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: android-task-manager-website/website/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build static export
+        run: npm run build

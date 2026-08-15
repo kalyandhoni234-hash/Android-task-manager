@@ -4,7 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "android-task-manager"
-version = "0.1.0"
+# The single authoritative version source is
+# src/android_task_manager/__init__.py (__version__); the package version,
+# the Windows EXE version resource and release tags all derive from it.
+dynamic = ["version"]
 description = "Terminal-based Android Task Manager / System Monitor that talks to a device over ADB."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -39,6 +42,9 @@ android-task-manager-gui = "android_task_manager.gui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "android_task_manager.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

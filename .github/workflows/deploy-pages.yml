@@ -1,0 +1,64 @@
+name: Deploy website to GitHub Pages
+
+# Builds the static export of the product website and deploys it to GitHub
+# Pages (https://kalyandhoni234-hash.github.io/Android-task-manager/).
+#
+# Note: the repository's Pages settings must be set to "Source: GitHub
+# Actions" (Settings → Pages) for the deploy step to be allowed.
+
+on:
+  push:
+    branches: ["master"]
+    paths: ["android-task-manager-website/website/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build static site
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android-task-manager-website/website
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: android-task-manager-website/website/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build static export
+        run: npm run build
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: android-task-manager-website/website/out
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,12 +1,32 @@
 # Android Task Manager
 
-A read-only Android/Linux system monitoring tool built with Python, ADB,
-`/proc`, `/sys`, and Android system interfaces.
+An Android/Linux system monitoring tool built with Python, ADB, `/proc`,
+`/sys`, and Android system interfaces.
 
 It shows CPU, memory, process, battery and network information from a
 connected Android device — either as a live terminal dashboard or as a
-PySide6 desktop GUI. Everything is read-only: the tool never starts, stops or
-modifies processes and never writes to the device.
+PySide6 desktop GUI. Monitoring is read-only (the tool never writes to the
+device); the GUI additionally offers three explicit, user-confirmed device
+actions — Open App, App Info and Force Stop — for a selected, package-verified
+app. Nothing else touches the phone.
+
+## Download (Windows)
+
+Users do not need Python, git or the source tree. The product website
+— <https://kalyandhoni234-hash.github.io/Android-task-manager/> — links
+directly to the versioned Windows release artifact
+(`AndroidTaskManager.exe`, a portable, self-contained PySide6 build) published
+as a GitHub Release asset:
+
+- Release pages: <https://github.com/kalyandhoni234-hash/Android-task-manager/releases>
+- Each release asset is published together with its `SHA-256` checksum
+  (`SHA256SUMS.txt` in the release), and the website download section shows
+  the checksum of the exact published EXE.
+
+The Windows executables are built by `packaging/build_windows.ps1`; on release
+tags (`v*`) the build happens in CI (`.github/workflows/release.yml`) and the
+artifacts are attached to the GitHub Release automatically. ADB is **not**
+bundled — see "Why is ADB not bundled?" below.
 
 ## Features
 
@@ -44,11 +64,27 @@ modifies processes and never writes to the device.
 - interface classification (Wi-Fi / Mobile Data / VPN / …)
 - active-interface filtering with a "show all" toggle (GUI)
 
+### Network investigation (GUI)
+
+- live socket tables: TCP and UDP, IPv4 and IPv6 (`/proc/net/{tcp,tcp6,udp,udp6}`)
+- local/remote endpoints and connection states
+- socket attribution to the owning **UID** (not PID), matched against the
+  exact package names reported by Android (`pm list packages -U`)
+- honest unavailable states when a socket table cannot be read
+
+### Device actions (GUI)
+
+- **Open App** and **App Info** for a selected, package-verified app
+- **Force Stop** for a selected, package-verified app
+- deliberately no kill-all, no cache/data clearing, no restarts, no
+  write access of any other kind
+
 ### GUI
 
 - PySide6 desktop dashboard
 - live CPU graph
 - process inspector detail panel
+- process filtering and sorting
 
 ### Terminal
 
@@ -162,7 +198,14 @@ install Python or any package.
 - The screen **auto-retries** every couple of seconds, and you can hit *Retry*
   at any time — plugging in a phone, authorizing, or locating adb mid-session
   recovers without restarting the app.
-- Once connected, the live dashboard appears and everything is read-only.
+- Once connected, the live dashboard appears. Monitoring is read-only; the
+  three Device Actions (Open App / App Info / Force Stop) are the only
+  interactive operations, and each requires an explicit selection.
+
+The EXE carries the product icon and a Windows version resource (product
+version = the release version, from the single version authority
+`src/android_task_manager/__init__.py`). Release builds are published as
+GitHub Release assets, each with its SHA-256 checksum.
 
 ### Why is ADB not bundled?
 
@@ -189,6 +232,12 @@ produces:
 - `dist\AndroidTaskManager.exe` — windowed build for normal users.
 - `dist\AndroidTaskManager-debug.exe` — console build that echoes connection
   state transitions to stdout (diagnostics).
+
+Both builds embed the product icon and a Windows version resource generated
+from the single version source (`packaging\make_version_file.py` + the icon
+in `packaging\assets\atm.ico`). The script prints the SHA-256 of each EXE;
+release CI (`.github/workflows/release.yml`) builds on tag pushes and attaches
+the EXEs plus `SHA256SUMS.txt` to the GitHub Release.
 
 ## Installation (Windows, from source)
 

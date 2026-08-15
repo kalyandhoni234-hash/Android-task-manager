@@ -19,6 +19,7 @@ build/
 *.spec
 *.egg-info/
 *.egg
+packaging/build/
 
 # IDE / editor
 .idea/

@@ -7,6 +7,12 @@ const STACK = [
   { name: "GitHub Actions", role: "Automated CI" },
 ];
 
+const FACTS = [
+  "Validated against a real Vivo V2026 (Android 11) over USB",
+  "Every collector reads real /proc, /sys and dumpsys output",
+  "ADB is never bundled — discovered or pointed at official Platform-Tools",
+];
+
 export function Credibility() {
   return (
     <section className="border-b border-border bg-bg-raised">
@@ -26,6 +32,20 @@ export function Credibility() {
               <code className="font-mono text-text-primary">dumpsys</code>{" "}
               output from the connected device.
             </p>
+            <ul className="mt-6 space-y-2.5">
+              {FACTS.map((fact) => (
+                <li
+                  key={fact}
+                  className="flex items-start gap-2.5 text-sm text-text-secondary"
+                >
+                  <span
+                    className="mt-2 h-1 w-1 shrink-0 rounded-full bg-accent"
+                    aria-hidden="true"
+                  />
+                  {fact}
+                </li>
+              ))}
+            </ul>
           </div>
 
           <div className="font-mono rounded-lg border border-border-strong bg-surface px-6 py-5 text-center">

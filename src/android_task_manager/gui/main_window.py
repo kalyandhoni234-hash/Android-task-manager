@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import __version__
 from ..action.models import ActionResult
 from ..battery.models import BatterySnapshot
 from ..cpu.models import CPUSnapshot
@@ -61,7 +62,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Android Task Manager")
+        self.setWindowTitle(f"Android Task Manager {__version__}")
         self.resize(960, 760)
 
         self.setup = SetupPanel()

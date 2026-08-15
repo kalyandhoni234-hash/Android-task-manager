@@ -20,6 +20,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication
 
+from android_task_manager import __version__
 from android_task_manager.adb.exceptions import (
     ADBDisconnectedError,
     ADBNoDeviceError,
@@ -280,7 +281,7 @@ def test_gui_imports() -> None:
 
 def test_main_window_constructs(qtapp) -> None:
     window = MainWindow()
-    assert window.windowTitle() == "Android Task Manager"
+    assert window.windowTitle() == f"Android Task Manager {__version__}"
     assert "Connecting" in window.device._status.text()
 
 

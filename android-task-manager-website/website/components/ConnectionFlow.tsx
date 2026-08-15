@@ -1,15 +1,33 @@
+const PLATFORM_TOOLS_URL =
+  "https://developer.android.com/tools/releases/platform-tools";
+const USB_DEBUGGING_URL =
+  "https://developer.android.com/studio/debug/dev-options";
+
 const STEPS = [
-  { title: "Download", body: "Get the packaged Windows executable — no Python required." },
-  { title: "Launch", body: "Open AndroidTaskManager.exe." },
-  { title: "Connect Android device", body: "Plug in over USB (or reach it over adb Wi-Fi)." },
-  { title: "Enable USB debugging", body: "Turned on once in Developer options." },
-  { title: "Authorize ADB", body: "Accept the debugging prompt on the phone." },
+  {
+    title: "Download",
+    body: "Get AndroidTaskManager.exe from the download section — a single portable file, no Python required.",
+  },
+  { title: "Launch", body: "Double-click AndroidTaskManager.exe." },
+  {
+    title: "Connect Android device",
+    body: "Plug in over USB (or reach the device over adb Wi-Fi).",
+  },
+  {
+    title: "Enable USB debugging",
+    body: "Turned on once in Developer options.",
+  },
+  {
+    title: "Authorize ADB",
+    body: "Accept the debugging prompt on the phone.",
+  },
   { title: "Start monitoring", body: "The live dashboard appears automatically." },
 ];
 
 const STATES = [
   "ADB discovery",
   "Locate ADB",
+  "ADB-missing guidance",
   "No-device state",
   "Authorization state",
   "Offline-device state",
@@ -51,12 +69,34 @@ export function ConnectionFlow() {
 
         <div className="mt-10 rounded-lg border border-border bg-surface p-6">
           <p className="text-sm text-text-secondary">
-            ADB <span className="text-text-primary">is required</span> — it&apos;s
-            the communication mechanism the app uses to reach the device. The
-            packaged Windows application itself does not require Python; it
-            handles the rest of the connection experience for you:
+            Android Task Manager uses <span className="text-text-primary">ADB</span>{" "}
+            to communicate with your Android device. If ADB is already
+            installed, the app finds it (app-adjacent, PATH,{" "}
+            <span className="font-mono text-xs">ANDROID_HOME</span> /{" "}
+            <span className="font-mono text-xs">ANDROID_SDK_ROOT</span>, and
+            standard SDK locations). If ADB is missing, the setup screen walks
+            you through installing the official Platform-Tools — ADB is never
+            bundled or downloaded silently.
           </p>
-          <div className="mt-4 flex flex-wrap gap-2">
+          <div className="mt-5 flex flex-wrap gap-3">
+            <a
+              href={PLATFORM_TOOLS_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-accent-strong"
+            >
+              Official Android Platform-Tools
+            </a>
+            <a
+              href={USB_DEBUGGING_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-md border border-border-strong px-4 py-2.5 text-sm font-medium text-text-primary transition-colors hover:border-accent-border hover:bg-bg-raised"
+            >
+              How to enable USB debugging
+            </a>
+          </div>
+          <div className="mt-5 flex flex-wrap gap-2">
             {STATES.map((state) => (
               <span
                 key={state}

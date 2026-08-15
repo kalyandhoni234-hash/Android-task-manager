@@ -8,38 +8,36 @@ import "@fontsource/space-grotesk/700.css";
 import "@fontsource/jetbrains-mono/400.css";
 import "@fontsource/jetbrains-mono/500.css";
 import "./globals.css";
+import { SITE_URL } from "@/lib/constants";
 
-// No production domain exists yet, so no absolute canonical/OG URLs are
-// emitted. Set SITE_URL (e.g. "https://android-task-manager.example") at
-// deploy time to opt into absolute canonical + Open Graph URLs.
-const siteUrl = process.env.SITE_URL;
+const siteUrl = SITE_URL.replace(/\/$/, "");
+const ogImageUrl = `${siteUrl}/og-image.png`;
 
 export const metadata: Metadata = {
-  title: "Android Task Manager — Android System Monitor for Windows",
+  metadataBase: new URL(siteUrl),
+  title: "Android Task Manager — Monitor your Android device on Windows",
   description:
-    "Monitor CPU, memory, processes, battery and network activity from your Android device on Windows.",
-  ...(siteUrl
-    ? {
-        metadataBase: new URL(siteUrl),
-        alternates: { canonical: "/" },
-        openGraph: { url: siteUrl },
-      }
-    : {}),
-  icons: {
-    icon: "/favicon.ico",
-  },
+    "Download the free Windows app that monitors CPU, memory, processes, network, battery and more from your Android device over ADB. Portable EXE, no Python required.",
+  alternates: { canonical: "/" },
   openGraph: {
-    title: "Android Task Manager — Android System Monitor for Windows",
+    title: "Android Task Manager — Monitor your Android device on Windows",
     description:
-      "Monitor CPU, memory, processes, battery and network activity from your Android device on Windows.",
+      "Desktop-grade monitoring and process investigation for Android. Download for Windows — no Python required.",
+    url: `${siteUrl}/`,
     siteName: "Android Task Manager",
     type: "website",
+    images: [{ url: ogImageUrl, width: 1200, height: 630, alt: "Android Task Manager — Android system monitor for Windows" }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Android Task Manager — Android System Monitor for Windows",
+    title: "Android Task Manager — Monitor your Android device on Windows",
     description:
-      "Monitor CPU, memory, processes, battery and network activity from your Android device on Windows.",
+      "Desktop-grade monitoring and process investigation for Android. Download for Windows — no Python required.",
+    images: [ogImageUrl],
+  },
+  icons: {
+    icon: "/favicon.ico",
+    apple: "/icon.png",
   },
 };
 

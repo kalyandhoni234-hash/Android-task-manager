@@ -18,6 +18,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication
 
+from android_task_manager import __version__
 from android_task_manager.adb.exceptions import (
     ADBAmbiguousDeviceError,
     ADBDisconnectedError,
@@ -151,7 +152,7 @@ def test_setup_panel_emits_refresh(qtapp) -> None:
 def test_window_starts_on_setup_page(qtapp) -> None:
     window = MainWindow()
     assert window._stack.currentIndex() == 0  # setup panel first
-    assert window.windowTitle() == "Android Task Manager"
+    assert window.windowTitle() == f"Android Task Manager {__version__}"
 
 
 def test_window_switches_to_dashboard_on_connect(qtapp) -> None:
