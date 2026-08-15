@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..action.models import ActionResult
 from ..battery.models import BatterySnapshot
 from ..cpu.models import CPUSnapshot
 from ..memory.models import MemorySnapshot
@@ -53,6 +54,10 @@ class MainWindow(QMainWindow):
     #: (serial) the user picked a device from the multi-device list.
     device_connect_requested = Signal(object)
 
+    #: (action, package) the user confirmed a device action; the app
+    #: forwards it to the action worker (queued onto that worker's thread).
+    action_requested = Signal(str, str)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Android Task Manager")
@@ -78,6 +83,7 @@ class MainWindow(QMainWindow):
         self._latest_processes: ProcessSnapshot | None = None
 
         self.processes.inspection_requested.connect(self.inspect_requested.emit)
+        self.processes.inspector.action_requested.connect(self._on_action_clicked)
 
         top_row = QHBoxLayout()
         top_row.addWidget(self.cpu, 1)
@@ -176,6 +182,45 @@ class MainWindow(QMainWindow):
         """Show the clean "process no longer available" state."""
         self.processes.show_inspection_gone(pid, message)
 
+    # ------------------------------------------------------------------
+    # Device action handlers (GUI thread)
+    # ------------------------------------------------------------------
+
+    def _on_action_clicked(self, action: str, package: str) -> None:
+        """Gate a clicked action behind confirmation, then forward it.
+
+        Open App and App Info proceed immediately. Force Stop is
+        destructive compared with monitoring: it always asks for explicit
+        confirmation that identifies the target package first.
+        """
+        if action == "force_stop" and not self._confirm_force_stop(package):
+            return
+        self.processes.inspector.set_actions_busy(True)
+        self.action_requested.emit(action, package)
+
+    def _confirm_force_stop(self, package: str) -> bool:
+        """Ask the user to explicitly confirm a package force stop."""
+        name = self.processes.inspector.display_name() or package
+        answer = QMessageBox.question(
+            self,
+            "Force Stop Application?",
+            "This will stop:\n"
+            f"    {name}\n\n"
+            f"Package:\n    {package}\n\n"
+            "Force Stop the application?",
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def on_action_result(self, result: ActionResult) -> None:
+        """Render the typed action outcome in the inspector panel."""
+        self.processes.inspector.show_action_result(result)
+
+    def on_packages_ready(self, packages: set[str]) -> None:
+        """Forward the verified package list to the inspector panel."""
+        self.processes.inspector.set_packages(packages)
+
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
         self.closed.emit()
         super().closeEvent(event)
@@ -200,3 +245,21 @@ def wire_inspector(window: MainWindow, inspector) -> None:
     window.inspect_requested.connect(inspector.request_inspect)
     inspector.inspection_ready.connect(window.on_inspection_ready)
     inspector.inspection_failed.connect(window.on_inspection_failed)
+
+
+def wire_actions(window: MainWindow, monitor: MonitorWorker, actions) -> None:
+    """Connect the device-action worker to the window and monitor.
+
+    Confirmed actions flow over a queued connection onto the action
+    worker's thread; typed results come back the same way. The installed
+    package list is refreshed every time the device (re)connects so action
+    availability always reflects the connected device.
+    """
+    window.action_requested.connect(actions.request_action)
+    actions.action_completed.connect(window.on_action_result)
+    actions.packages_ready.connect(window.on_packages_ready)
+    monitor.connection_changed.connect(
+        lambda state, _detail: (
+            actions.reload_packages() if state is ConnectionState.CONNECTED else None
+        )
+    )

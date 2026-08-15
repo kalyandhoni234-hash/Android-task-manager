@@ -73,8 +73,12 @@ class ProcessWidget(QWidget):
         self._inspector = ProcessInspectorWidget()
         self._inspector.closed.connect(self._inspector.hide)
         layout.addWidget(self._inspector)
-
         self.set_snapshot(ProcessSnapshot(timestamp=0.0))
+
+    @property
+    def inspector(self) -> ProcessInspectorWidget:
+        """The embedded detail/actions panel."""
+        return self._inspector
 
     def _on_selection_changed(self) -> None:
         rows = self._table.selectionModel().selectedRows()

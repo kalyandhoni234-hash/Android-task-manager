@@ -7,12 +7,18 @@ sends commands, never reads device output and never computes raw deltas.
 Memory labels are precise: "Resident" means VmRSS, "Virtual" means VmSize and
 "Shared" means RssShmem. RSS is not PSS and is not "total RAM the app owns";
 pages shared with other processes are counted for every owner.
+
+Device Actions live here: Open App / App Info / Force Stop. A button is
+usable only when the selected process resolves to a verified installed
+package (see ``action.resolution``); kernel and system processes all render
+"Actions unavailable" and cannot receive application actions.
 """
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -21,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...action import ActionErrorKind, ActionResult, resolve_package
 from ...process.inspector_models import ProcessInspectionSnapshot
 from ...terminal.renderer import format_kib
 from . import panel_host
@@ -49,6 +56,10 @@ class ProcessInspectorWidget(QWidget):
 
     #: User pressed the hide button.
     closed = Signal()
+
+    #: (action, package) the user clicked an action button. Only emitted
+    #: when the selected process resolved to a verified package identity.
+    action_requested = Signal(str, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -91,7 +102,47 @@ class ProcessInspectorWidget(QWidget):
         self._command_line.hide()
         layout.addWidget(self._command_line)
 
+        # ------------------------------------------------------------------
+        # Device Actions row
+        # ------------------------------------------------------------------
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        self._actions_caption = QLabel("Actions")
+        self._actions_caption.setObjectName("caption")
+        action_row.addWidget(self._actions_caption)
+        self._open_btn = self._make_action_button("Open App")
+        self._info_btn = self._make_action_button("App Info")
+        self._stop_btn = self._make_action_button("Force Stop", primary=False)
+        action_row.addWidget(self._open_btn)
+        action_row.addWidget(self._info_btn)
+        action_row.addWidget(self._stop_btn)
+        self._open_btn.clicked.connect(lambda: self._on_action_clicked("open_app"))
+        self._info_btn.clicked.connect(lambda: self._on_action_clicked("app_info"))
+        self._stop_btn.clicked.connect(lambda: self._on_action_clicked("force_stop"))
+        self._status = QLabel("")
+        self._status.setObjectName("muted")
+        self._status.setWordWrap(True)
+        action_row.addWidget(self._status, 1)
+        layout.addLayout(action_row)
+
+        self._packages: set[str] = set()
+        self._last_snapshot: ProcessInspectionSnapshot | None = None
+        self._resolved_package: str | None = None
+        self._busy = False
+
         self.hide()
+
+    # ------------------------------------------------------------------
+    # Presentation
+    # ------------------------------------------------------------------
+
+    def _make_action_button(self, text: str, primary: bool = True) -> QPushButton:
+        button = QPushButton(text)
+        button.setObjectName("primary" if primary else "secondary")
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        button.setEnabled(False)
+        return button
 
     def set_snapshot(self, snapshot: ProcessInspectionSnapshot) -> None:
         """Populate the panel with a normalized inspection result and show it."""
@@ -128,6 +179,8 @@ class ProcessInspectorWidget(QWidget):
         else:
             self._command_line.hide()
 
+        self._last_snapshot = snapshot
+        self._refresh_actions()
         self.show()
 
     def set_gone(self, pid: int, message: str | None = None) -> None:
@@ -140,4 +193,93 @@ class ProcessInspectorWidget(QWidget):
         for value in self._rows.values():
             value.setText("N/A")
         self._command_line.hide()
+        self._last_snapshot = None
+        self._resolved_package = None
+        self._status.setText("")
+        self._actions_caption.setText("Actions unavailable")
+        self._set_buttons(False)
         self.show()
+
+    # ------------------------------------------------------------------
+    # Device Actions
+    # ------------------------------------------------------------------
+
+    def set_packages(self, packages: set[str]) -> None:
+        """Provide the verified installed-package set for identity checks."""
+        self._packages = set(packages)
+        self._refresh_actions()
+
+    def set_actions_busy(self, busy: bool) -> None:
+        """Disable action buttons while an action is in flight."""
+        self._busy = busy
+        self._refresh_actions()
+
+    def show_action_result(self, result: ActionResult) -> None:
+        """Render the typed outcome of the last action and re-enable buttons."""
+        self._busy = False
+        self._refresh_actions()
+        self._status.setText(result.message)
+        if result.success or result.error_kind is None:
+            self._status.setObjectName("muted")
+        else:
+            self._status.setObjectName("statusWarn")
+        app = QApplication.instance()
+        if app is not None:
+            app.style().unpolish(self._status)
+            app.style().polish(self._status)
+        self._status.update()
+
+    def display_name(self) -> str:
+        """Best human-readable name for the currently shown process."""
+        if self._last_snapshot is not None:
+            return self._last_snapshot.name or ""
+        return ""
+
+    def resolved_package(self) -> str | None:
+        """The verified package identity of the shown process (or None)."""
+        return self._resolved_package
+
+    def _refresh_actions(self) -> None:
+        """Enable or disable action buttons from the current identity state.
+
+        Actions are available only when the shown process resolves to a
+        package that is verified against the installed package list.
+        Kernel threads, framework processes and unverifiable rows render
+        "Actions unavailable" instead of guessing.
+        """
+        snapshot = self._last_snapshot
+        if snapshot is not None:
+            self._resolved_package = resolve_package(
+                snapshot.name,
+                snapshot.command_line,
+                self._packages,
+            )
+        else:
+            self._resolved_package = None
+
+        if self._busy:
+            self._set_buttons(False)
+            return
+
+        if snapshot is None:
+            self._set_buttons(False)
+            return
+
+        package = self._resolved_package
+        if package is not None:
+            self._actions_caption.setText(f"Actions for {package}")
+            self._set_buttons(True)
+        else:
+            self._actions_caption.setText("Application actions unavailable for this process.")
+            self._set_buttons(False)
+
+    def _set_buttons(self, enabled: bool) -> None:
+        self._open_btn.setEnabled(enabled)
+        self._info_btn.setEnabled(enabled)
+        self._stop_btn.setEnabled(enabled)
+
+    def _on_action_clicked(self, action: str) -> None:
+        package = self._resolved_package
+        if package is None:
+            return
+        self.action_requested.emit(action, package)

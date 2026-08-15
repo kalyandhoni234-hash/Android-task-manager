@@ -88,8 +88,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         from PySide6.QtCore import QThread
         from PySide6.QtWidgets import QApplication
 
+        from .action_worker import ActionWorker
         from .inspector_worker import ProcessInspectionWorker
-        from .main_window import MainWindow, wire, wire_inspector
+
+        from .main_window import MainWindow, wire, wire_actions, wire_inspector
         from .monitor import MonitorWorker
         from .styles import DARK_STYLE
     except ImportError:
@@ -128,8 +130,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         network_interval=args.network_interval,
     )
     inspector = ProcessInspectionWorker(connection=connection, timeout=args.timeout)
+    actions = ActionWorker(connection=connection, timeout=args.timeout)
     wire(window, worker)
     wire_inspector(window, inspector)
+    wire_actions(window, worker, actions)
 
     # First-run setup flow: the window asks; the shared connection + worker
     # react. Retry/relocate/device-pick are delivered onto the worker thread.
@@ -170,17 +174,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     inspector_thread = QThread()
     inspector.moveToThread(inspector_thread)
 
+    actions_thread = QThread()
+    actions.moveToThread(actions_thread)
+
     def shutdown() -> None:
         worker.stop()
         thread.quit()
         thread.wait(3000)
         inspector_thread.quit()
         inspector_thread.wait(3000)
+        actions_thread.quit()
+        actions_thread.wait(3000)
 
     app.aboutToQuit.connect(shutdown)
 
     thread.start()
     inspector_thread.start()
+    actions_thread.start()
     window.show()
     return app.exec()
 
