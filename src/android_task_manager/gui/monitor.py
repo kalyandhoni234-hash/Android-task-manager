@@ -31,6 +31,7 @@ from ..battery.collector import BatteryCollector
 from ..cpu.collector import CPUCollector
 from ..memory.collector import MemoryCollector
 from ..network.collector import NetworkCollector
+from ..network_investigation.collector import NetworkInvestigationCollector
 from ..process.collector import ProcessCollector
 
 
@@ -64,6 +65,9 @@ class MonitorWorker(QObject):
     #: (cpu, memory, processes, battery, network) — cached snapshot objects
     #: (None until that collector has produced its first successful result).
     snapshots = Signal(object, object, object, object, object)
+    #: (NetworkInvestigationSnapshot) — the socket-level view from the
+    #: investigation collector; published on its own slower cadence.
+    network_investigation = Signal(object)
     #: (device_label, android_version)
     device_info = Signal(str, str)
     #: (ConnectionState, error_detail)
@@ -87,6 +91,7 @@ class MonitorWorker(QObject):
         process_interval: float = 5.0,
         battery_interval: float = 15.0,
         network_interval: float = 5.0,
+        network_investigation_interval: float = 10.0,
     ) -> None:
         super().__init__()
         self._connection = connection or ConnectionManager(
@@ -99,12 +104,14 @@ class MonitorWorker(QObject):
         self._process_collector = ProcessCollector(self._connection)
         self._battery_collector = BatteryCollector(self._connection)
         self._network_collector = NetworkCollector(self._connection)
+        self._network_investigation_collector = NetworkInvestigationCollector(self._connection)
 
         self._cpu_interval = cpu_interval
         self._memory_interval = memory_interval
         self._process_interval = process_interval
         self._battery_interval = battery_interval
         self._network_interval = network_interval
+        self._network_investigation_interval = network_investigation_interval
 
         self._stopped = False
         self._cpu: object | None = None
@@ -112,10 +119,12 @@ class MonitorWorker(QObject):
         self._processes: object | None = None
         self._battery: object | None = None
         self._network: object | None = None
+        self._network_investigation: object | None = None
         self._last_memory_at = 0.0
         self._last_process_at = 0.0
         self._last_battery_at = 0.0
         self._last_network_at = 0.0
+        self._last_network_investigation_at = 0.0
 
     # ------------------------------------------------------------------
     # Lifecycle / loop
@@ -271,6 +280,15 @@ class MonitorWorker(QObject):
         if self._network is None or (now - self._last_network_at) >= self._network_interval:
             collect("network", self._network_collector.sample, "_network")
             self._last_network_at = time.monotonic()
+        if self._network_investigation is None or (
+            now - self._last_network_investigation_at
+        ) >= self._network_investigation_interval:
+            collect(
+                "network investigation",
+                self._network_investigation_collector.sample,
+                "_network_investigation",
+            )
+            self._last_network_investigation_at = time.monotonic()
 
         if errors:
             self.connection_changed.emit(state, "; ".join(errors))
@@ -278,3 +296,5 @@ class MonitorWorker(QObject):
             self.connection_changed.emit(ConnectionState.CONNECTED, "")
 
         self.snapshots.emit(self._cpu, self._memory, self._processes, self._battery, self._network)
+        if self._network_investigation is not None:
+            self.network_investigation.emit(self._network_investigation)

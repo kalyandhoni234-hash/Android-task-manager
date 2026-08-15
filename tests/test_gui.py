@@ -49,6 +49,10 @@ from android_task_manager.network.models import (
     NetworkSnapshot,
     NetworkThroughput,
 )
+from android_task_manager.network_investigation.models import (
+    NetworkInvestigationSnapshot,
+    SocketInfo,
+)
 from android_task_manager.process.inspector_models import ProcessInspectionSnapshot
 from android_task_manager.process.models import ProcessInfo, ProcessSnapshot
 
@@ -232,6 +236,28 @@ def _device_responses() -> dict[str, str]:
             " wlan0: 112932964 105705 0 0 0 0 0 0 11157432 31390 577 0 0 0 0 0\n"
             "  ccmni3:  1324567   8129 2 0 0 0 0 0   893241   6115 1 0 0 0 0 0\n"
             "  lo:      18401   2964 0 0 0 0 0 0   18401   2964 0 0 0 0 0 0\n"
+        ),
+        "cat /proc/net/tcp": (
+            "sl local_address rem_address st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n"
+        ),
+        "cat /proc/net/tcp6": (
+            "sl local_address                         remote_address"
+            "                        st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode\n"
+            "  7: 008102242828E139EBE8095A40AB1FEC:B3B6"
+            " 9BFF640000000000000000002711F09D:01BB 08 00000000:00000019"
+            " 00:00000000 00000000 10203        0 30828972 1 0000000000000000"
+            " 47 4 28 10 -1\n"
+        ),
+        "cat /proc/net/udp": (
+            "sl local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n"
+        ),
+        "cat /proc/net/udp6": (
+            "sl local_address                         remote_address"
+            "                        st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode ref pointer drops\n"
+        ),
+        "pm list packages -U": (
+            "package:com.google.android.youtube uid:10181\n"
+            "package:com.instagram.android uid:10203\n"
         ),
     }
 
@@ -803,6 +829,121 @@ def test_wire_inspector_connects_full_loop(qtapp) -> None:
     panel = window.processes._inspector
     assert not panel.isHidden()
     assert panel._title.text() == "com.instagram.android"
+
+
+def _investigation_snapshot() -> NetworkInvestigationSnapshot:
+    return NetworkInvestigationSnapshot(
+        timestamp=1.0,
+        sockets=(
+            SocketInfo(
+                protocol="tcp",
+                family="ipv6",
+                local_address="2402:8100:39e1:2828:5a09:e8eb:ec1f:ab40",
+                local_port=46006,
+                remote_address="64:ff9b:0:0:0:0:9df0:1127",
+                remote_port=443,
+                state="CLOSE-WAIT",
+                uid=10203,
+                inode=30828972,
+            ),
+        ),
+        source_available=True,
+        uid_packages={10203: ("com.instagram.android",)},
+    )
+
+
+def test_window_renders_network_section_for_process_uid(qtapp) -> None:
+    window = MainWindow()
+    window.update_network_investigation(_investigation_snapshot())
+    window.on_inspection_ready(
+        ProcessInspectionSnapshot(pid=24791, name="com.instagram.android", uid=10203, timestamp=1.0)
+    )
+    panel = window.processes._inspector
+    assert "10203" in panel._network_caption.text()
+    assert "com.instagram.android" in panel._network_caption.text()
+    assert panel._network_table.rowCount() == 1
+    assert panel._network_table.item(0, 0).text() == "TCP IPV6"
+    assert panel._network_table.item(0, 1).text() == "2402:8100:39e1:2828:5a09:e8eb:ec1f:ab40:46006"
+    assert panel._network_table.item(0, 3).text() == "CLOSE-WAIT"
+
+
+def test_inspector_network_section_states_are_distinct(qtapp) -> None:
+    panel = _inspector_with_uid(10203)
+
+    # (a) awaiting the first investigation sample.
+    assert "Awaiting" in panel._network_caption.text()
+    assert panel._network_table.rowCount() == 0
+
+    # (b) device refused the socket reads: never fabricate, say so instead.
+    panel.set_network_data(
+        NetworkInvestigationSnapshot(
+            timestamp=1.0, sockets=(),
+            source_available=False, source_errors=("denied",),
+        )
+    )
+    assert "unavailable" in panel._network_caption.text().lower()
+    assert panel._network_table.rowCount() == 0
+
+    # (c) tables read but the device held no sockets at all.
+    panel.set_network_data(
+        NetworkInvestigationSnapshot(timestamp=1.0, sockets=(), source_available=True)
+    )
+    assert "No connections were observed" in panel._network_caption.text()
+
+    # (d) sockets exist, none attributed to this UID.
+    panel.set_network_data(
+        NetworkInvestigationSnapshot(
+            timestamp=1.0,
+            sockets=(
+                SocketInfo(
+                    protocol="tcp", family="ipv6",
+                    local_address="2001:db8::1", local_port=53,
+                    remote_address="2001:db8::2", remote_port=443,
+                    state="ESTABLISHED", uid=1000, inode=1,
+                ),
+            ),
+            source_available=True,
+        )
+    )
+    assert "No connections attributed" in panel._network_caption.text()
+    assert panel._network_table.rowCount() == 0
+
+
+def _inspector_with_uid(uid: int):
+    """Show a process panel so network-data updates re-render."""
+    from android_task_manager.gui.widgets.process_inspector_widget import (
+        ProcessInspectorWidget,
+    )
+
+    panel = ProcessInspectorWidget()
+    panel.set_snapshot(
+        ProcessInspectionSnapshot(pid=24791, name="com.instagram.android", uid=uid, timestamp=1.0)
+    )
+    return panel
+
+
+def test_inspector_network_heals_as_samples_arrive(qtapp) -> None:
+    panel = _inspector_with_uid(10203)
+    assert "Awaiting" in panel._network_caption.text()
+    panel.set_network_data(_investigation_snapshot())
+    assert panel._network_table.rowCount() == 1
+    assert "com.instagram.android" in panel._network_caption.text()
+
+
+def test_worker_emits_network_investigation_signal(qtapp) -> None:
+    worker = MonitorWorker(connection=_FakeConnection(_device_responses()))
+    received: list = []
+    worker.network_investigation.connect(received.append)
+    worker._connect()
+    worker.tick()
+    assert len(received) == 1
+    snapshot = received[0]
+    assert isinstance(snapshot, NetworkInvestigationSnapshot)
+    assert snapshot.source_available is True
+    assert snapshot.packages_for_uid(10203) == ("com.instagram.android",)
+    sockets = snapshot.sockets_for_uid(10203)
+    assert len(sockets) == 1
+    assert sockets[0].state == "CLOSE-WAIT"
 
 
 def test_process_inspector_hide_button(qtapp) -> None:

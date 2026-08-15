@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...network_investigation.models import NetworkInvestigationSnapshot
 from ...process.inspector_models import ProcessInspectionSnapshot
 from ...process.models import ProcessSnapshot
 from . import panel_host
@@ -183,10 +184,14 @@ class ProcessWidget(QWidget):
             return
         self.inspection_requested.emit(int(item.text()))
 
-    def show_inspection(self, snapshot: ProcessInspectionSnapshot) -> None:
+    def show_inspection(
+        self,
+        snapshot: ProcessInspectionSnapshot,
+        network_data: NetworkInvestigationSnapshot | None = None,
+    ) -> None:
         """Present a completed inspection below the table."""
         self._inspected_pid = snapshot.pid
-        self._inspector.set_snapshot(snapshot)
+        self._inspector.set_snapshot(snapshot, network_data)
 
     def show_inspection_gone(self, pid: int, message: str | None = None) -> None:
         """Present the clean "process no longer available" state."""

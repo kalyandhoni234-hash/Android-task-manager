@@ -20,6 +20,7 @@ from ..battery.models import BatterySnapshot
 from ..cpu.models import CPUSnapshot
 from ..memory.models import MemorySnapshot
 from ..network.models import NetworkSnapshot
+from ..network_investigation.models import NetworkInvestigationSnapshot
 from ..process.inspector_models import ProcessInspectionSnapshot
 from ..process.models import ProcessSnapshot
 from .monitor import ConnectionState, MonitorWorker
@@ -82,6 +83,10 @@ class MainWindow(QMainWindow):
         #: associated with the matching ProcessInfo (cpu/memory percent).
         self._latest_processes: ProcessSnapshot | None = None
 
+        #: Most recent NetworkInvestigationSnapshot, kept so process
+        #: inspections can render the UID-attributed socket view.
+        self._latest_network_investigation: NetworkInvestigationSnapshot | None = None
+
         self.processes.inspection_requested.connect(self.inspect_requested.emit)
         self.processes.inspector.action_requested.connect(self._on_action_clicked)
 
@@ -141,6 +146,13 @@ class MainWindow(QMainWindow):
     def update_device(self, label: str, android_version: str) -> None:
         self.device.set_info(label, android_version)
 
+    def update_network_investigation(
+        self, snapshot: NetworkInvestigationSnapshot
+    ) -> None:
+        """Refresh the UID-attributed socket view, including an open panel."""
+        self._latest_network_investigation = snapshot
+        self.processes.inspector.set_network_data(snapshot)
+
     def update_devices(self, devices: list[dict[str, str]]) -> None:
         """Fill the multi-device picker on the setup screen."""
         self.setup.set_devices(devices)
@@ -176,7 +188,7 @@ class MainWindow(QMainWindow):
                 cpu_percent=info.cpu_percent,
                 memory_percent=info.memory_percent,
             )
-        self.processes.show_inspection(snapshot)
+        self.processes.show_inspection(snapshot, self._latest_network_investigation)
 
     def on_inspection_failed(self, pid: int, message: str) -> None:
         """Show the clean "process no longer available" state."""
@@ -237,6 +249,7 @@ class MainWindow(QMainWindow):
 def wire(window: MainWindow, worker: MonitorWorker) -> None:
     """Connect a MonitorWorker's signals to the MainWindow slots."""
     worker.snapshots.connect(window.update_snapshots)
+    worker.network_investigation.connect(window.update_network_investigation)
     worker.device_info.connect(window.update_device)
     worker.connection_changed.connect(window.update_connection)
     worker.devices_available.connect(window.update_devices)

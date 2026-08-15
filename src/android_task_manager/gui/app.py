@@ -23,6 +23,7 @@ _DEFAULT_MEMORY_INTERVAL = 10.0
 _DEFAULT_PROCESS_INTERVAL = 5.0
 _DEFAULT_BATTERY_INTERVAL = 15.0
 _DEFAULT_NETWORK_INTERVAL = 5.0
+_DEFAULT_NETWORK_INVESTIGATION_INTERVAL = 10.0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -73,6 +74,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=_DEFAULT_NETWORK_INTERVAL,
         help="Seconds between /proc/net/dev reads (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--network-investigation-interval",
+        type=float,
+        default=_DEFAULT_NETWORK_INVESTIGATION_INTERVAL,
+        help="Seconds between socket-table reads (default: %(default)s).",
     )
     parser.add_argument(
         "--timeout", type=float, default=10.0, help="Per-command timeout (default: %(default)s)."
@@ -128,6 +135,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         process_interval=args.process_interval,
         battery_interval=args.battery_interval,
         network_interval=args.network_interval,
+        network_investigation_interval=args.network_investigation_interval,
     )
     inspector = ProcessInspectionWorker(connection=connection, timeout=args.timeout)
     actions = ActionWorker(connection=connection, timeout=args.timeout)

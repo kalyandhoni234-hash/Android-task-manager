@@ -21,13 +21,17 @@ from PySide6.QtWidgets import (
     QApplication,
     QGridLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from ...action import ActionErrorKind, ActionResult, resolve_package
+from ...network_investigation.models import NetworkInvestigationSnapshot
 from ...process.inspector_models import ProcessInspectionSnapshot
 from ...terminal.renderer import format_kib
 from . import panel_host
@@ -46,9 +50,27 @@ _FIELDS = (
     "I/O Write",
 )
 
+#: Caption shown when the device denied the socket-table reads.
+_NETWORK_SOURCE_UNAVAILABLE = (
+    "Network attribution unavailable: Android blocks these socket reads without root."
+)
+#: Caption shown when the tables were read but held no sockets at all.
+_NETWORK_NO_CONNECTIONS = "No connections were observed on the device."
+#: Caption shown while no investigation sample has arrived yet.
+_NETWORK_AWAITING = "Awaiting the first network investigation sample…"
+
+_NETWORK_COLUMNS = ("Protocol", "Local", "Remote", "State")
+
 
 def _fmt_mem(kib: int | None) -> str:
     return "N/A" if kib is None else format_kib(kib)
+
+
+def _endpoint(address: str, port: int | None) -> str:
+    """Format ``address:port`` without ever inventing a value."""
+    if address is None or port is None:
+        return "N/A"
+    return f"{address}:{port}"
 
 
 def _fmt_io(value: int | None) -> str:
@@ -135,6 +157,28 @@ class ProcessInspectorWidget(QWidget):
         action_row.addWidget(self._status, 1)
         layout.addLayout(action_row)
 
+        # ------------------------------------------------------------------
+        # Network connections section (M14, UID-level attribution only)
+        # ------------------------------------------------------------------
+        self._network_caption = QLabel(_NETWORK_AWAITING)
+        self._network_caption.setObjectName("caption")
+        self._network_caption.setWordWrap(True)
+        layout.addWidget(self._network_caption)
+
+        self._network_table = QTableWidget(0, len(_NETWORK_COLUMNS))
+        self._network_table.setHorizontalHeaderLabels(list(_NETWORK_COLUMNS))
+        self._network_table.verticalHeader().setVisible(False)
+        self._network_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._network_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self._network_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        header = self._network_table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setStretchLastSection(True)
+        self._network_table.setMaximumHeight(180)
+        layout.addWidget(self._network_table)
+
+        self._network_data: NetworkInvestigationSnapshot | None = None
+
         self._packages: set[str] = set()
         self._last_snapshot: ProcessInspectionSnapshot | None = None
         self._resolved_package: str | None = None
@@ -154,13 +198,18 @@ class ProcessInspectorWidget(QWidget):
         button.setEnabled(False)
         return button
 
-    def set_snapshot(self, snapshot: ProcessInspectionSnapshot) -> None:
+    def set_snapshot(
+        self,
+        snapshot: ProcessInspectionSnapshot,
+        network_data: NetworkInvestigationSnapshot | None = None,
+    ) -> None:
         """Populate the panel with a normalized inspection result and show it.
 
         Selection state is reset FIRST: the previous process's verified
         package, action buttons and result status must never leak into the
         new selection. Buttons are then recomputed from the new identity.
         """
+        self._network_data = network_data
         self._title.setText(snapshot.name or f"PID {snapshot.pid}")
         uid = "N/A" if snapshot.uid is None else str(snapshot.uid)
         self._subtitle.setText(f"PID {snapshot.pid}   UID {uid}")
@@ -201,8 +250,84 @@ class ProcessInspectorWidget(QWidget):
         self._resolved_package = None
         self._status.setText("")
         self._status.setObjectName("muted")
+        self._render_network()
         self._refresh_actions()
         self.show()
+
+    def set_network_data(self, network_data: NetworkInvestigationSnapshot) -> None:
+        """Refresh the network section when a new investigation sample arrives.
+
+        Only re-renders when a process panel is currently displayed; the
+        panel shows nothing (and re-renders on its next open) otherwise.
+        """
+        self._network_data = network_data
+        if self._last_snapshot is not None:
+            self._render_network()
+
+    def _render_network(self) -> None:
+        """Render the network section for the currently shown snapshot.
+
+        Four distinct states are presented honestly: awaiting the first
+        investigation sample, the device refusing the socket reads, the
+        tables being read with no sockets in them at all, and the process
+        having no sockets attributed to its UID. Nothing is ever fabricated.
+        """
+        snapshot = self._last_snapshot
+        board = self._network_data
+
+        if snapshot is None or snapshot.uid is None:
+            self._network_caption.setText(
+                _NETWORK_SOURCE_UNAVAILABLE
+                if snapshot is not None
+                else _NETWORK_AWAITING
+            )
+            self._network_table.setRowCount(0)
+            return
+
+        if board is None:
+            self._network_caption.setText(_NETWORK_AWAITING)
+            self._network_table.setRowCount(0)
+            return
+
+        if not board.source_available:
+            self._network_caption.setText(_NETWORK_SOURCE_UNAVAILABLE)
+            self._network_table.setRowCount(0)
+            return
+
+        sockets = board.sockets_for_uid(snapshot.uid)
+        if not board.sockets:
+            self._network_caption.setText(_NETWORK_NO_CONNECTIONS)
+        elif not sockets:
+            self._network_caption.setText(
+                f"No connections attributed to this process (UID {snapshot.uid})."
+            )
+        else:
+            packages = board.packages_for_uid(snapshot.uid)
+            package_text = ", ".join(packages) if packages else "unknown package"
+            self._network_caption.setText(
+                f"Connections attributed to UID {snapshot.uid} ({package_text})"
+            )
+
+        self._network_table.setRowCount(len(sockets))
+        for row_index, socket in enumerate(sockets):
+            protocol = socket.protocol.upper()
+            values = (
+                f"{protocol} {socket.family.upper()}",
+                (
+                    _endpoint(socket.local_address, socket.local_port)
+                    if socket.local_address is not None
+                    else "N/A"
+                ),
+                (
+                    _endpoint(socket.remote_address, socket.remote_port)
+                    if socket.remote_address is not None
+                    else "N/A"
+                ),
+                socket.state or "-",
+            )
+            for column, text in enumerate(values):
+                item = QTableWidgetItem(text)
+                self._network_table.setItem(row_index, column, item)
 
     def set_gone(self, pid: int, message: str | None = None) -> None:
         """Show the clean "process no longer exists" state."""
@@ -215,6 +340,8 @@ class ProcessInspectorWidget(QWidget):
             value.setText("N/A")
             value.setToolTip("")
         self._command_line.hide()
+        self._network_caption.setText(_NETWORK_AWAITING)
+        self._network_table.setRowCount(0)
         self._last_snapshot = None
         self._resolved_package = None
         self._status.setText("")

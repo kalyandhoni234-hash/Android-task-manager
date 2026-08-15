@@ -260,6 +260,7 @@ All flags:
 | `--process-interval SECONDS` | Seconds between `ps`/`top` process refreshes | `5.0` |
 | `--battery-interval SECONDS` | Seconds between `dumpsys battery` reads | `15.0` |
 | `--network-interval SECONDS` | Seconds between `/proc/net/dev` reads | `5.0` |
+| `--network-investigation-interval SECONDS` | GUI: seconds between socket-table reads | `10.0` |
 | `--timeout SECONDS` | Per-command timeout | `10.0` |
 
 Example: five samples, two seconds apart, using an explicit adb:
@@ -287,8 +288,9 @@ android-task-manager-gui
 
 (or `android-task-manager-gui --adb "C:\platform-tools\adb.exe"` — the GUI
 accepts the same `--adb`, `--device`, `--interval`, `--process-interval`,
-`--battery-interval`, `--memory-interval`, `--network-interval` and
-`--timeout` flags; it has no `--samples` flag.)
+`--battery-interval`, `--memory-interval`, `--network-interval`,
+`--network-investigation-interval` and `--timeout` flags; it has no
+`--samples` flag.)
 
 The dashboard shows, top to bottom:
 
@@ -318,6 +320,15 @@ resident memory, shared memory, command line and I/O counters. Inspections
 run on a background worker thread, so the dashboard keeps sampling while the
 read is in flight. If the process exits mid-inspection, the panel shows a
 clean "Process no longer available" state.
+
+The Process Inspector also shows a **Network Connections** table: the
+device's socket tables (`/proc/net/tcp{,6}`, `/proc/net/udp{,6}`) are read
+on a slow cadence and sockets are attributed to the selected process **by
+its UID**, resolved against the installed packages sharing that UID
+(`pm list packages -U`). This is deliberately **not** PID-level attribution:
+Android exposes no per-socket PID to a non-root process, so the tool says
+that instead of guessing. When the device refuses the socket reads, the
+section explains that rather than fabricating data.
 
 Some fields may display **N/A**: Android permissions and vendor
 implementations vary, so a value may be unavailable (for example a
