@@ -17,9 +17,13 @@ QFrame#panel {
     border: 1px solid #2a323c;
     border-radius: 8px;
 }
+QFrame#sectionRule {
+    background-color: #2a323c;
+    border: none;
+}
 QLabel#sectionTitle {
     color: #7a8794;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     letter-spacing: 1px;
 }

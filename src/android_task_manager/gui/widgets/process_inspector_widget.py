@@ -248,16 +248,30 @@ class ProcessInspectorWidget(QWidget):
         self._perms_layout = QVBoxLayout(self._perms_host)
         self._perms_layout.setContentsMargins(0, 0, 0, 0)
         self._perms_layout.setSpacing(4)
-        self._perms_empty = QLabel("No permissions were reported.")
-        self._perms_empty.setObjectName("muted")
-        self._perms_empty.setTextFormat(Qt.TextFormat.PlainText)
-        self._perms_layout.addWidget(self._perms_empty)
         perms_scroll = QScrollArea()
         perms_scroll.setWidgetResizable(True)
         perms_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         perms_scroll.setMaximumHeight(230)
         perms_scroll.setWidget(self._perms_host)
         layout.addWidget(perms_scroll)
+
+        # Lightweight pre-audit empty state (never an empty-looking box):
+        # an invitation line plus a quiet hint, both replaced by real
+        # results once the audit completes.
+        self._perms_empty = QLabel(
+            "Run a permission audit to inspect package permissions."
+        )
+        self._perms_empty.setObjectName("muted")
+        self._perms_empty.setTextFormat(Qt.TextFormat.PlainText)
+        self._perms_empty.setWordWrap(True)
+        layout.addWidget(self._perms_empty)
+
+        self._perms_hint = QLabel(
+            "Results will appear here after the audit completes."
+        )
+        self._perms_hint.setObjectName("muted")
+        self._perms_hint.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self._perms_hint)
 
         self._packages: set[str] = set()
         self._last_snapshot: ProcessInspectionSnapshot | None = None
@@ -628,9 +642,10 @@ class ProcessInspectorWidget(QWidget):
         self._flags_box.hide()
         self._clear_layout(self._flags_layout)
         self._clear_layout(self._perms_layout)
-        self._perms_empty.setText("No permissions were reported.")
-        self._perms_layout.addWidget(self._perms_empty)
+        self._perms_empty.setText("Run a permission audit to inspect package permissions.")
         self._perms_empty.show()
+        self._perms_hint.setText("Results will appear here after the audit completes.")
+        self._perms_hint.show()
         self._perm_status.setText("")
         self._refresh_permission_button()
 
@@ -663,8 +678,12 @@ class ProcessInspectorWidget(QWidget):
         own explicit state, never collapsed into Granted/Not granted."""
         self._clear_layout(self._perms_layout)
         if not permissions:
+            self._perms_empty.setText("No permissions were reported.")
+            self._perms_hint.hide()
             self._perms_empty.show()
             return
+        self._perms_empty.hide()
+        self._perms_hint.hide()
         grouped: dict[str, list[PermissionEntry]] = {key: [] for key in _PERMISSION_GROUP_ORDER}
         for entry in permissions:
             grouped.setdefault(entry.permission_type, []).append(entry)

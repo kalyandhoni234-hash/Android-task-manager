@@ -457,7 +457,37 @@ class TestPermissionsTab:
         qtapp.processEvents()
         inspector.show_permission_audit(permission_audit(parse_complete=True))
         assert not _labels_with_text(inspector, "Granted")
+        assert _labels_with_text(
+            inspector, "Run a permission audit to inspect package permissions."
+        )
+
+    def test_pre_audit_empty_state_invites_and_never_boxes(self, qtapp):
+        inspector = _inspector_with_resolved_app(qtapp)
+        assert _labels_with_text(
+            inspector, "Run a permission audit to inspect package permissions."
+        )
+        assert _labels_with_text(
+            inspector, "Results will appear here after the audit completes."
+        )
+        inspector.show_permission_audit(permission_audit(parse_complete=True))
+        assert not _labels_with_text(
+            inspector, "Results will appear here after the audit completes."
+        )
+
+    def test_audit_with_no_permissions_shows_honest_empty_state(self, qtapp):
+        inspector = _inspector_with_resolved_app(qtapp)
+        audit = PackagePermissionAudit(
+            package_name="com.example.app",
+            read_at=_AT,
+            permissions=(),
+            parse_complete=True,
+            combination_flags=(),
+        )
+        inspector.show_permission_audit(audit)
         assert _labels_with_text(inspector, "No permissions were reported.")
+        assert not _labels_with_text(
+            inspector, "Results will appear here after the audit completes."
+        )
 
     def test_audit_failure_shows_visible_status(self, qtapp):
         inspector = _inspector_with_resolved_app(qtapp)

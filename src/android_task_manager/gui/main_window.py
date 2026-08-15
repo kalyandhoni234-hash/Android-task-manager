@@ -133,8 +133,8 @@ class MainWindow(QMainWindow):
         bottom_row.addWidget(self.network, 1)
 
         content = QVBoxLayout()
-        content.setContentsMargins(12, 2, 12, 2)
-        content.setSpacing(6)
+        content.setContentsMargins(14, 4, 14, 8)
+        content.setSpacing(10)
         content.addWidget(self.device)
         content.addLayout(top_row)
         content.addWidget(self.processes, 1)
