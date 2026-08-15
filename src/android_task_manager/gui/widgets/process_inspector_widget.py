@@ -145,7 +145,12 @@ class ProcessInspectorWidget(QWidget):
         return button
 
     def set_snapshot(self, snapshot: ProcessInspectionSnapshot) -> None:
-        """Populate the panel with a normalized inspection result and show it."""
+        """Populate the panel with a normalized inspection result and show it.
+
+        Selection state is reset FIRST: the previous process's verified
+        package, action buttons and result status must never leak into the
+        new selection. Buttons are then recomputed from the new identity.
+        """
         self._title.setText(snapshot.name or f"PID {snapshot.pid}")
         uid = "N/A" if snapshot.uid is None else str(snapshot.uid)
         self._subtitle.setText(f"PID {snapshot.pid}   UID {uid}")
@@ -180,6 +185,9 @@ class ProcessInspectorWidget(QWidget):
             self._command_line.hide()
 
         self._last_snapshot = snapshot
+        self._resolved_package = None
+        self._status.setText("")
+        self._status.setObjectName("muted")
         self._refresh_actions()
         self.show()
 
@@ -215,8 +223,19 @@ class ProcessInspectorWidget(QWidget):
         self._refresh_actions()
 
     def show_action_result(self, result: ActionResult) -> None:
-        """Render the typed outcome of the last action and re-enable buttons."""
+        """Render the typed outcome of an action, if it still belongs here.
+
+        The result is rendered only when its package still matches the
+        *currently selected* process's verified package. If the selection
+        changed while the action was in flight, the outcome belongs to the
+        previous process and is discarded — a stale "Opened X" message must
+        never appear under a different process. The busy lock is released
+        either way so buttons follow the current selection.
+        """
         self._busy = False
+        if result.package_name != self._resolved_package:
+            self._refresh_actions()
+            return
         self._refresh_actions()
         self._status.setText(result.message)
         if result.success or result.error_kind is None:
@@ -240,12 +259,12 @@ class ProcessInspectorWidget(QWidget):
         return self._resolved_package
 
     def _refresh_actions(self) -> None:
-        """Enable or disable action buttons from the current identity state.
+        """Atomic button/caption update derived ONLY from the current identity.
 
-        Actions are available only when the shown process resolves to a
-        package that is verified against the installed package list.
-        Kernel threads, framework processes and unverifiable rows render
-        "Actions unavailable" instead of guessing.
+        All three buttons always share one enabled state coming from a
+        freshly recomputed verified package for the *current* snapshot —
+        never from a previously selected process. The safe default when no
+        identity can be verified is all buttons disabled.
         """
         snapshot = self._last_snapshot
         if snapshot is not None:
@@ -257,21 +276,22 @@ class ProcessInspectorWidget(QWidget):
         else:
             self._resolved_package = None
 
-        if self._busy:
-            self._set_buttons(False)
-            return
-
         if snapshot is None:
+            self._actions_caption.setText("Actions unavailable")
             self._set_buttons(False)
             return
 
         package = self._resolved_package
         if package is not None:
             self._actions_caption.setText(f"Actions for {package}")
-            self._set_buttons(True)
         else:
             self._actions_caption.setText("Application actions unavailable for this process.")
+
+        if self._busy:
             self._set_buttons(False)
+            return
+
+        self._set_buttons(package is not None)
 
     def _set_buttons(self, enabled: bool) -> None:
         self._open_btn.setEnabled(enabled)

@@ -483,8 +483,15 @@ def test_worker_run_action_sync_path(qtapp) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _select_verified(window: MainWindow, snapshot: ProcessInspectionSnapshot | None = None) -> None:
+    """Give the window a verified current selection (real click prerequisite)."""
+    window.processes.inspector.set_packages(PACKAGES)
+    window.processes.inspector.set_snapshot(snapshot or app_snapshot())
+
+
 def test_force_stop_cancel_does_not_execute(qtapp, monkeypatch) -> None:
     window = MainWindow()
+    _select_verified(window)
     emitted: list[tuple[str, str]] = []
     window.action_requested.connect(lambda *args: emitted.append(args))
     monkeypatch.setattr(
@@ -500,6 +507,7 @@ def test_force_stop_cancel_does_not_execute(qtapp, monkeypatch) -> None:
 
 def test_force_stop_confirm_executes(qtapp, monkeypatch) -> None:
     window = MainWindow()
+    _select_verified(window)
     emitted: list[tuple[str, str]] = []
     window.action_requested.connect(lambda *args: emitted.append(args))
     monkeypatch.setattr(
@@ -514,6 +522,7 @@ def test_force_stop_confirm_executes(qtapp, monkeypatch) -> None:
 
 def test_harmless_actions_skip_confirmation(qtapp, monkeypatch) -> None:
     window = MainWindow()
+    _select_verified(window)
     emitted: list[tuple[str, str]] = []
     window.action_requested.connect(lambda *args: emitted.append(args))
     called = {"question": False}
@@ -616,6 +625,219 @@ def test_wire_actions_reloads_packages_on_connect(qtapp, monkeypatch) -> None:
     source.connection_changed.emit(ConnectionState.DISCONNECTED, "bye")
     source.connection_changed.emit(ConnectionState.CONNECTED, "ok again")
     assert len(reloads) == 2
+
+
+# ---------------------------------------------------------------------------
+# M12.2: selection transition — no state may leak between processes
+# ---------------------------------------------------------------------------
+
+
+def system_snapshot_named(name: str = "system_server") -> ProcessInspectionSnapshot:
+    return ProcessInspectionSnapshot(pid=1054, name=name, uid=1000, timestamp=1.0)
+
+
+def _system_snapshot() -> ProcessInspectionSnapshot:
+    return system_snapshot_named()
+
+
+def test_switch_from_verified_app_disables_all_actions(qtapp) -> None:
+    widget = ProcessInspectorWidget()
+    widget.set_packages(PACKAGES)
+    widget.set_snapshot(app_snapshot())
+    assert widget._open_btn.isEnabled()
+    assert widget._info_btn.isEnabled()
+    assert widget._stop_btn.isEnabled()
+    widget.set_snapshot(_system_snapshot())
+    assert widget.resolved_package() is None
+    assert not widget._open_btn.isEnabled()
+    assert not widget._info_btn.isEnabled()
+    assert not widget._stop_btn.isEnabled()
+
+
+def test_switch_clears_stale_result_status(qtapp) -> None:
+    widget = ProcessInspectorWidget()
+    widget.set_packages(PACKAGES)
+    widget.set_snapshot(app_snapshot())
+    widget.set_actions_busy(True)
+    widget.show_action_result(
+        ActionResult(
+            action="app_info",
+            package_name="com.heavy.app",
+            success=True,
+            message="Opened App Info for com.heavy.app",
+        )
+    )
+    assert widget._status.text() == "Opened App Info for com.heavy.app"
+    widget.set_snapshot(_system_snapshot())
+    assert widget._status.text() == ""
+    assert widget._status.objectName() == "muted"
+    assert not widget._open_btn.isEnabled()
+
+
+def test_switch_after_app_info_never_targets_previous_package(qtapp) -> None:
+    widget = ProcessInspectorWidget()
+    widget.set_packages(PACKAGES)
+    widget.set_snapshot(app_snapshot())
+    widget.set_snapshot(_system_snapshot())
+    emitted: list[tuple[str, str]] = []
+    widget.action_requested.connect(lambda *args: emitted.append(args))
+    widget._open_btn.click()
+    widget._info_btn.click()
+    widget._stop_btn.click()
+    assert emitted == []
+
+
+def test_switch_from_system_to_app_b_resolves_b_not_a(qtapp) -> None:
+    widget = ProcessInspectorWidget()
+    widget.set_packages(PACKAGES)
+    widget.set_snapshot(_system_snapshot())
+    assert widget.resolved_package() is None
+    snapshot_b = ProcessInspectionSnapshot(
+        pid=777, name="com.android.systemui", uid=10013, timestamp=1.0
+    )
+    widget.set_snapshot(snapshot_b)
+    assert widget.resolved_package() == "com.android.systemui"
+    assert widget._info_btn.isEnabled()
+
+
+def test_stale_async_result_is_discarded_after_switching(qtapp) -> None:
+    widget = ProcessInspectorWidget()
+    widget.set_packages(PACKAGES)
+    widget.set_snapshot(app_snapshot())  # com.heavy.app selected
+    widget.set_actions_busy(True)  # app_info for com.heavy.app in flight
+    # The user switches selection while the action runs...
+    snapshot_b = ProcessInspectionSnapshot(
+        pid=777, name="com.android.systemui", uid=10013, timestamp=1.0
+    )
+    widget.set_snapshot(snapshot_b)
+    assert widget.resolved_package() == "com.android.systemui"
+    # ...and the old result arrives afterwards.
+    widget.show_action_result(
+        ActionResult(
+            action="app_info",
+            package_name="com.heavy.app",
+            success=True,
+            message="Opened App Info for com.heavy.app",
+        )
+    )
+    assert widget._status.text() == ""
+    assert widget.resolved_package() == "com.android.systemui"
+    assert widget._info_btn.isEnabled()
+
+
+def test_stale_async_result_after_gone_is_discarded(qtapp) -> None:
+    widget = ProcessInspectorWidget()
+    widget.set_packages(PACKAGES)
+    widget.set_snapshot(app_snapshot())
+    widget.set_actions_busy(True)
+    widget.set_gone(8150)
+    widget.show_action_result(
+        ActionResult(
+            action="force_stop",
+            package_name="com.heavy.app",
+            success=True,
+            message="Force stopped com.heavy.app",
+        )
+    )
+    assert widget._status.text() == ""
+    assert not widget._open_btn.isEnabled()
+
+
+def test_matching_result_is_still_rendered_after_reselect(qtapp) -> None:
+    widget = ProcessInspectorWidget()
+    widget.set_packages(PACKAGES)
+    widget.set_snapshot(app_snapshot())
+    widget.set_actions_busy(True)
+    widget.show_action_result(
+        ActionResult(
+            action="open_app",
+            package_name="com.heavy.app",
+            success=True,
+            message="Opened com.heavy.app",
+        )
+    )
+    assert widget._status.text() == "Opened com.heavy.app"
+    assert widget._open_btn.isEnabled()
+
+
+def test_empty_package_list_disables_actions_after_switch(qtapp) -> None:
+    widget = ProcessInspectorWidget()
+    widget.set_packages(PACKAGES)
+    widget.set_snapshot(app_snapshot())
+    widget.set_packages(set())
+    assert widget.resolved_package() is None
+    assert not widget._open_btn.isEnabled()
+    assert not widget._info_btn.isEnabled()
+    assert not widget._stop_btn.isEnabled()
+
+
+def test_gone_process_click_executes_nothing(qtapp) -> None:
+    widget = ProcessInspectorWidget()
+    widget.set_packages(PACKAGES)
+    widget.set_snapshot(app_snapshot())
+    widget.set_gone(8150)
+    emitted: list[tuple[str, str]] = []
+    widget.action_requested.connect(lambda *args: emitted.append(args))
+    widget._open_btn.click()
+    widget._stop_btn.click()
+    assert emitted == []
+
+
+def test_no_stale_confirmation_state_after_switch(qtapp, monkeypatch) -> None:
+    window = MainWindow()
+    _select_verified(window)
+    emitted: list[tuple[str, str]] = []
+    window.action_requested.connect(lambda *args: emitted.append(args))
+    confirmed: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: (
+            confirmed.append(args[2]),
+            QMessageBox.StandardButton.Yes,
+        )[1],
+    )
+    window._on_action_clicked("force_stop", "com.heavy.app")
+    assert emitted == [("force_stop", "com.heavy.app")]
+    window.processes.inspector.set_snapshot(_system_snapshot())
+    # A fresh force-stop request for the unverified system_server is rejected
+    # before any dialog: no stale confirmation, no stale execution.
+    window._on_action_clicked("force_stop", "com.heavy.app")
+    assert emitted == [("force_stop", "com.heavy.app")]
+    assert len(confirmed) == 1
+
+
+# ---------------------------------------------------------------------------
+# M12.2 security: stale package context must be rejected at the window
+# ---------------------------------------------------------------------------
+
+
+def test_old_package_context_rejected_after_selection_change(qtapp, monkeypatch) -> None:
+    window = MainWindow()
+    _select_verified(window)  # com.heavy.app selected and verified
+    emitted: list[tuple[str, str]] = []
+    window.action_requested.connect(lambda *args: emitted.append(args))
+    # The user switches to system_server...
+    window.processes.inspector.set_snapshot(_system_snapshot())
+    # ...then an action request arrives carrying the OLD package context.
+    window._on_action_clicked("force_stop", "com.heavy.app")
+    window._on_action_clicked("open_app", "com.heavy.app")
+    assert emitted == []
+    assert not window.processes.inspector._busy
+
+
+def test_worker_never_runs_action_for_stale_package(qtapp) -> None:
+    runner = _FakeRunner({"am force-stop com.heavy.app": ""})
+    worker = ActionWorker(connection=runner, timeout=3.0)
+    window = MainWindow()
+    _select_verified(window)
+    wire_actions(window, _SignalSource(), worker)
+    window.processes.inspector.set_snapshot(_system_snapshot())
+    results: list[ActionResult] = []
+    worker.action_completed.connect(lambda r: results.append(r))
+    window._on_action_clicked("force_stop", "com.heavy.app")
+    assert results == []
+    assert runner.calls == []
 
 
 def test_main_window_with_wire_closes_cleanly(qtapp) -> None:

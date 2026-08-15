@@ -98,6 +98,10 @@ QPushButton#primary:hover {
 QPushButton#primary:pressed {
     background-color: #2559c2;
 }
+QPushButton#primary:disabled {
+    background-color: #232b35;
+    color: #5c6672;
+}
 QPushButton#secondary {
     background-color: #232b35;
     color: #d8dee6;
@@ -108,6 +112,11 @@ QPushButton#secondary {
 }
 QPushButton#secondary:hover {
     background-color: #2b3541;
+}
+QPushButton#secondary:disabled {
+    background-color: #1d232b;
+    color: #5c6672;
+    border-color: #232b35;
 }
 QLabel#setupTitle {
     font-size: 26px;

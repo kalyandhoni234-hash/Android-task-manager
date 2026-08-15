@@ -189,10 +189,18 @@ class MainWindow(QMainWindow):
     def _on_action_clicked(self, action: str, package: str) -> None:
         """Gate a clicked action behind confirmation, then forward it.
 
+        The request is executed only when *package* still matches the
+        *currently selected* process's verified identity: a stale context
+        from a previously selected process is rejected outright. This is a
+        defense in depth layer — the inspector already derives the package
+        from its live selection at click time.
+
         Open App and App Info proceed immediately. Force Stop is
         destructive compared with monitoring: it always asks for explicit
         confirmation that identifies the target package first.
         """
+        if package != self.processes.inspector.resolved_package():
+            return
         if action == "force_stop" and not self._confirm_force_stop(package):
             return
         self.processes.inspector.set_actions_busy(True)
