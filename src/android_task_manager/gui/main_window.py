@@ -6,6 +6,7 @@ from dataclasses import replace
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QFileDialog,
     QHBoxLayout,
     QMainWindow,
     QMessageBox,
@@ -17,8 +18,16 @@ from PySide6.QtWidgets import (
 
 from .. import __version__
 from ..action.models import ActionResult
+from ..baseline import (
+    BaselineSnapshot,
+    DriftReport,
+    Session,
+    new_process_refs,
+    new_socket_identities,
+)
 from ..battery.models import BatterySnapshot
 from ..cpu.models import CPUSnapshot
+from ..heuristics import HeuristicReport
 from ..memory.models import MemorySnapshot
 from ..network.models import NetworkSnapshot
 from ..network_investigation.models import NetworkInvestigationSnapshot
@@ -26,6 +35,7 @@ from ..process.inspector_models import ProcessInspectionSnapshot
 from ..process.models import ProcessSnapshot
 from .monitor import ConnectionState, MonitorWorker
 from .setup_panel import INSTALL_ADB_STEPS, USB_DEBUGGING_STEPS, SetupPanel
+from .widgets.baseline_panel import BaselinePanel
 from .widgets.battery_widget import BatteryWidget
 from .widgets.cpu_widget import CPUWidget
 from .widgets.device_widget import DeviceWidget
@@ -60,6 +70,15 @@ class MainWindow(QMainWindow):
     #: forwards it to the action worker (queued onto that worker's thread).
     action_requested = Signal(str, str)
 
+    #: The user asked to capture a fresh baseline (BaselineWorker).
+    baseline_save_requested = Signal()
+    #: (BaselineSnapshot) the user asked to check drift against this baseline.
+    baseline_check_requested = Signal(object)
+    #: (kind, path, Session) the user picked an export target.
+    baseline_export_requested = Signal(str, str, object)
+    #: (package) the user asked to audit a resolved package's permissions.
+    permission_audit_requested = Signal(str)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"Android Task Manager {__version__}")
@@ -79,6 +98,7 @@ class MainWindow(QMainWindow):
         self.processes = ProcessWidget()
         self.battery = BatteryWidget()
         self.network = NetworkWidget()
+        self.security = BaselinePanel()
 
         #: Most recent ProcessSnapshot, kept so inspection results can be
         #: associated with the matching ProcessInfo (cpu/memory percent).
@@ -88,8 +108,21 @@ class MainWindow(QMainWindow):
         #: inspections can render the UID-attributed socket view.
         self._latest_network_investigation: NetworkInvestigationSnapshot | None = None
 
+        #: Baseline & Security GUI-layer state (in-memory; persistence is
+        #: still deferred): the saved baseline, the current snapshot and the
+        #: report of the last drift check.
+        self._baseline: BaselineSnapshot | None = None
+        self._current_snapshot: BaselineSnapshot | None = None
+        self._drift_report: DriftReport | None = None
+
         self.processes.inspection_requested.connect(self.inspect_requested.emit)
         self.processes.inspector.action_requested.connect(self._on_action_clicked)
+        self.security.save_requested.connect(self._on_security_save_requested)
+        self.security.check_requested.connect(self._on_security_check_requested)
+        self.security.export_requested.connect(self._on_export_requested)
+        self.processes.inspector.permission_audit_requested.connect(
+            self.permission_audit_requested.emit
+        )
 
         top_row = QHBoxLayout()
         top_row.addWidget(self.cpu, 1)
@@ -105,6 +138,7 @@ class MainWindow(QMainWindow):
         content.addWidget(self.device)
         content.addLayout(top_row)
         content.addWidget(self.processes, 1)
+        content.addWidget(self.security)
         content.addLayout(bottom_row)
 
         container = QWidget()
@@ -242,6 +276,101 @@ class MainWindow(QMainWindow):
         """Forward the verified package list to the inspector panel."""
         self.processes.inspector.set_packages(packages)
 
+    # ------------------------------------------------------------------
+    # Baseline & Security handlers (GUI thread; results from BaselineWorker)
+    # ------------------------------------------------------------------
+
+    def on_baseline_saved(self, snapshot: BaselineSnapshot) -> None:
+        """Adopt a fresh baseline; drift state resets with it.
+
+        The previous report belongs to the old baseline, so the drift
+        display, the NEW badges and the export buttons all reset honestly.
+        """
+        self._baseline = snapshot
+        self._current_snapshot = None
+        self._drift_report = None
+        self.security.set_baseline(snapshot)
+        self.processes.set_new_process_refs(frozenset())
+        self.processes.inspector.set_new_socket_identities(frozenset())
+
+    def on_baseline_failed(self, message: str) -> None:
+        self.security.show_save_failed(message)
+
+    def on_drift_checked(
+        self,
+        report: DriftReport,
+        current: BaselineSnapshot,
+        heuristics: HeuristicReport,
+    ) -> None:
+        """Render the drift check and project the NEW identities onto the
+        existing process table and the inspector's socket table."""
+        self._current_snapshot = current
+        self._drift_report = report
+        self.security.show_drift(report, heuristics)
+        if self._baseline is None:
+            return
+        self.processes.set_new_process_refs(
+            new_process_refs(report, self._baseline, current)
+        )
+        self.processes.inspector.set_new_socket_identities(
+            new_socket_identities(report, self._baseline, current)
+        )
+
+    def on_drift_failed(self, message: str) -> None:
+        self.security.show_drift_failed(message)
+
+    def on_export_completed(self, success: bool, message: str) -> None:
+        self.security.show_export_result(success, message)
+
+    def _on_security_save_requested(self) -> None:
+        """Flip the panel into its in-progress state, then run the save
+        on the worker thread. Results release the lock via their own
+        handlers."""
+        self.security.set_save_busy(True)
+        self.baseline_save_requested.emit()
+
+    def _on_security_check_requested(self, baseline: BaselineSnapshot) -> None:
+        self.security.set_check_busy(True)
+        self.baseline_check_requested.emit(baseline)
+
+    def _on_export_requested(self, kind: str) -> None:
+        """Ask for a file target, then hand the session to the worker.
+
+        A cancelled dialog is reported as such — the user never wonders
+        whether an export ran. File writing itself happens on the worker
+        thread, never on the GUI thread.
+        """
+        if self._baseline is None or self._current_snapshot is None or self._drift_report is None:
+            return
+        session = Session(baseline=self._baseline, current=self._current_snapshot, drift_report=self._drift_report)
+        if kind == "json":
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Export session JSON",
+                "session.json",
+                "JSON file (*.json)",
+            )
+        else:
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Export drift events CSV",
+                "drift-events.csv",
+                "CSV file (*.csv)",
+            )
+        if not path:
+            self.security.show_export_cancelled()
+            return
+        self.security.set_export_busy(True)
+        self.baseline_export_requested.emit(kind, path, session)
+
+    def on_permission_audit_ready(self, audit) -> None:
+        """Render an audit result in the inspector (stale results are
+        discarded there by package match)."""
+        self.processes.inspector.show_permission_audit(audit)
+
+    def on_permission_audit_failed(self, package: str, message: str) -> None:
+        self.processes.inspector.show_permission_audit_failed(package, message)
+
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
         self.closed.emit()
         super().closeEvent(event)
@@ -285,3 +414,27 @@ def wire_actions(window: MainWindow, monitor: MonitorWorker, actions) -> None:
             actions.reload_packages() if state is ConnectionState.CONNECTED else None
         )
     )
+
+
+def wire_security(window: MainWindow, worker) -> None:
+    """Connect the BaselineWorker's signals to the window.
+
+    Requests flow over queued connections onto the worker's thread; results
+    (snapshots, reports, export outcomes) come back the same way. The GUI
+    thread only renders.
+    """
+    window.baseline_save_requested.connect(worker.request_save_baseline)
+    window.baseline_check_requested.connect(worker.request_drift_check)
+    window.baseline_export_requested.connect(worker.request_export)
+    worker.baseline_saved.connect(window.on_baseline_saved)
+    worker.baseline_failed.connect(window.on_baseline_failed)
+    worker.drift_checked.connect(window.on_drift_checked)
+    worker.drift_failed.connect(window.on_drift_failed)
+    worker.export_completed.connect(window.on_export_completed)
+
+
+def wire_permissions(window: MainWindow, worker) -> None:
+    """Connect the PermissionWorker to the window and the inspector."""
+    window.permission_audit_requested.connect(worker.request_audit)
+    worker.audit_ready.connect(window.on_permission_audit_ready)
+    worker.audit_failed.connect(window.on_permission_audit_failed)

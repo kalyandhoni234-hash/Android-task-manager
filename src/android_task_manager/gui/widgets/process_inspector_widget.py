@@ -17,6 +17,7 @@ package (see ``action.resolution``); kernel and system processes all render
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QApplication,
     QGridLayout,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QPushButton,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -31,7 +33,9 @@ from PySide6.QtWidgets import (
 )
 
 from ...action import ActionErrorKind, ActionResult, resolve_package
+from ...baseline import SocketIdentity
 from ...network_investigation.models import NetworkInvestigationSnapshot
+from ...permissions import CombinationFlag, PackagePermissionAudit, PermissionEntry
 from ...process.inspector_models import ProcessInspectionSnapshot
 from ...terminal.renderer import format_kib
 from . import panel_host
@@ -60,6 +64,28 @@ _NETWORK_NO_CONNECTIONS = "No connections were observed on the device."
 _NETWORK_AWAITING = "Awaiting the first network investigation sample…"
 
 _NETWORK_COLUMNS = ("Protocol", "Local", "Remote", "State")
+
+#: Cell badge text for socket rows matching a NEW drift event.
+_NEW_SOCKET_BADGE = "[NEW] "
+#: Subtle row tint for badge rows, kept inside the existing dark palette.
+_NEW_SOCKET_BACKGROUND = QColor("#2f3d35")
+#: Tooltip explaining the socket badge (a drift fact, never a verdict).
+_NEW_SOCKET_TOOLTIP = "New socket since the baseline was saved."
+
+#: Visible granted-state vocabulary — "Unknown" is a real state and is
+#: never collapsed into either of the other two.
+_GRANTED_LABELS = {True: "Granted", False: "Not granted", None: "Unknown"}
+
+#: Section order + captions for the permission groups.
+_PERMISSION_GROUP_ORDER = ("runtime", "install", "unknown")
+_PERMISSION_GROUP_TITLES = {
+    "runtime": "Runtime permissions",
+    "install": "Install permissions",
+    "unknown": "Unknown permissions",
+}
+
+#: Banner shown when the audit could not verify the full permission list.
+_PERM_INCOMPLETE_BANNER = "Permission data may be incomplete"
 
 
 def _fmt_mem(kib: int | None) -> str:
@@ -91,6 +117,9 @@ class ProcessInspectorWidget(QWidget):
     #: (action, package) the user clicked an action button. Only emitted
     #: when the selected process resolved to a verified package identity.
     action_requested = Signal(str, str)
+
+    #: (package) the user asked to audit a resolved package's permissions.
+    permission_audit_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -179,10 +208,63 @@ class ProcessInspectorWidget(QWidget):
 
         self._network_data: NetworkInvestigationSnapshot | None = None
 
+        # ------------------------------------------------------------------
+        # Permissions section (on-demand audit of the resolved package)
+        # ------------------------------------------------------------------
+        self._perms_caption = QLabel("PERMISSIONS")
+        self._perms_caption.setObjectName("sectionTitle")
+        layout.addWidget(self._perms_caption)
+
+        perms_row = QHBoxLayout()
+        perms_row.setSpacing(8)
+        self._audit_btn = QPushButton("Audit Permissions")
+        self._audit_btn.setObjectName("secondary")
+        self._audit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._audit_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._audit_btn.setEnabled(False)
+        self._audit_btn.clicked.connect(self._on_audit_clicked)
+        perms_row.addWidget(self._audit_btn)
+        self._perm_status = QLabel("")
+        self._perm_status.setObjectName("muted")
+        self._perm_status.setWordWrap(True)
+        perms_row.addWidget(self._perm_status, 1)
+        layout.addLayout(perms_row)
+
+        self._perm_banner = QLabel(_PERM_INCOMPLETE_BANNER)
+        self._perm_banner.setObjectName("statusWarn")
+        self._perm_banner.setWordWrap(True)
+        self._perm_banner.setTextFormat(Qt.TextFormat.PlainText)
+        self._perm_banner.hide()
+        layout.addWidget(self._perm_banner)
+
+        self._flags_box = QWidget()
+        self._flags_layout = QVBoxLayout(self._flags_box)
+        self._flags_layout.setContentsMargins(0, 0, 0, 0)
+        self._flags_layout.setSpacing(4)
+        self._flags_box.hide()
+        layout.addWidget(self._flags_box)
+
+        self._perms_host = QWidget()
+        self._perms_layout = QVBoxLayout(self._perms_host)
+        self._perms_layout.setContentsMargins(0, 0, 0, 0)
+        self._perms_layout.setSpacing(4)
+        self._perms_empty = QLabel("No permissions were reported.")
+        self._perms_empty.setObjectName("muted")
+        self._perms_empty.setTextFormat(Qt.TextFormat.PlainText)
+        self._perms_layout.addWidget(self._perms_empty)
+        perms_scroll = QScrollArea()
+        perms_scroll.setWidgetResizable(True)
+        perms_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        perms_scroll.setMaximumHeight(230)
+        perms_scroll.setWidget(self._perms_host)
+        layout.addWidget(perms_scroll)
+
         self._packages: set[str] = set()
         self._last_snapshot: ProcessInspectionSnapshot | None = None
         self._resolved_package: str | None = None
         self._busy = False
+        self._permission_busy = False
+        self._new_sockets: frozenset[SocketIdentity] = frozenset()
 
         self.hide()
 
@@ -250,6 +332,8 @@ class ProcessInspectorWidget(QWidget):
         self._resolved_package = None
         self._status.setText("")
         self._status.setObjectName("muted")
+        self._permission_busy = False
+        self._reset_permissions()
         self._render_network()
         self._refresh_actions()
         self.show()
@@ -310,6 +394,15 @@ class ProcessInspectorWidget(QWidget):
 
         self._network_table.setRowCount(len(sockets))
         for row_index, socket in enumerate(sockets):
+            is_new = (
+                SocketIdentity(
+                    protocol=socket.protocol,
+                    local_address=socket.local_address,
+                    local_port=socket.local_port,
+                    uid=socket.uid,
+                )
+                in self._new_sockets
+            )
             protocol = socket.protocol.upper()
             values = (
                 f"{protocol} {socket.family.upper()}",
@@ -327,7 +420,23 @@ class ProcessInspectorWidget(QWidget):
             )
             for column, text in enumerate(values):
                 item = QTableWidgetItem(text)
+                if column == 0 and is_new:
+                    item.setText(f"{_NEW_SOCKET_BADGE}{text}")
+                    item.setToolTip(_NEW_SOCKET_TOOLTIP)
+                if is_new:
+                    item.setBackground(QBrush(_NEW_SOCKET_BACKGROUND))
                 self._network_table.setItem(row_index, column, item)
+
+    def set_new_socket_identities(self, identities: frozenset[SocketIdentity]) -> None:
+        """Set the NEW socket identities to badge in this process's table.
+
+        Badging only affects rows of processes whose sockets include a NEW
+        one — the table population itself is unchanged. An empty set clears
+        all badges (e.g. when a fresh baseline is saved).
+        """
+        self._new_sockets = frozenset(identities)
+        if self._last_snapshot is not None:
+            self._render_network()
 
     def set_gone(self, pid: int, message: str | None = None) -> None:
         """Show the clean "process no longer exists" state."""
@@ -347,6 +456,10 @@ class ProcessInspectorWidget(QWidget):
         self._status.setText("")
         self._actions_caption.setText("Actions unavailable")
         self._set_buttons(False)
+        self._permission_busy = False
+        self._reset_permissions()
+        self._refresh_actions()
+        self._refresh_permission_button()
         self.show()
 
     # ------------------------------------------------------------------
@@ -420,6 +533,7 @@ class ProcessInspectorWidget(QWidget):
         if snapshot is None:
             self._actions_caption.setText("Actions unavailable")
             self._set_buttons(False)
+            self._refresh_permission_button()
             return
 
         package = self._resolved_package
@@ -430,9 +544,11 @@ class ProcessInspectorWidget(QWidget):
 
         if self._busy:
             self._set_buttons(False)
+            self._refresh_permission_button()
             return
 
         self._set_buttons(package is not None)
+        self._refresh_permission_button()
 
     def _set_buttons(self, enabled: bool) -> None:
         self._open_btn.setEnabled(enabled)
@@ -444,3 +560,166 @@ class ProcessInspectorWidget(QWidget):
         if package is None:
             return
         self.action_requested.emit(action, package)
+
+    # ------------------------------------------------------------------
+    # Permissions audit
+    # ------------------------------------------------------------------
+
+    def _refresh_permission_button(self) -> None:
+        """Audit is usable exactly when the selected process has a verified
+        package identity (same resolution the device actions use) and no
+        audit is in flight."""
+        self._audit_btn.setEnabled(
+            self._resolved_package is not None and not self._permission_busy
+        )
+
+    def _on_audit_clicked(self) -> None:
+        package = self._resolved_package
+        if package is None or self._permission_busy:
+            return
+        self.permission_audit_requested.emit(package)
+        self._permission_busy = True
+        self._refresh_permission_button()
+        self._perm_status.setText("Reading permissions…")
+        self._perm_status.setObjectName("muted")
+        self._restyle(self._perm_status)
+
+    def show_permission_audit(self, audit: PackagePermissionAudit) -> None:
+        """Render an audit result, unless it belongs to a previous selection.
+
+        Like action results, an audit whose package no longer matches the
+        currently selected process is discarded outright — a stale result
+        must never be shown under a different process. The busy flag is
+        released either way.
+        """
+        self._permission_busy = False
+        if audit.package_name != self._resolved_package:
+            self._refresh_permission_button()
+            return
+        self._refresh_permission_button()
+        self._perm_status.setText("")
+        if audit.parse_complete:
+            self._perm_banner.hide()
+        else:
+            self._perm_banner.show()
+        self._render_flags(audit.combination_flags)
+        self._render_permission_groups(audit.permissions)
+
+    def show_permission_audit_failed(self, package: str, message: str) -> None:
+        """Render a typed audit failure, unless it belongs to a previous
+        selection or the process is gone."""
+        self._permission_busy = False
+        if package != self._resolved_package:
+            self._refresh_permission_button()
+            return
+        self._refresh_permission_button()
+        self._perm_status.setText(f"Permission read failed: {message}")
+        self._perm_status.setObjectName("statusWarn")
+        self._restyle(self._perm_status)
+
+    def _reset_permissions(self) -> None:
+        """Clear the permissions section for a new selection (or a gone one).
+
+        The pending audit (if any) belongs to the previous process; its
+        result is discarded later by the package match, and the busy flag
+        is released here so a new audit can start immediately.
+        """
+        self._perm_banner.hide()
+        self._flags_box.hide()
+        self._clear_layout(self._flags_layout)
+        self._clear_layout(self._perms_layout)
+        self._perms_empty.setText("No permissions were reported.")
+        self._perms_layout.addWidget(self._perms_empty)
+        self._perms_empty.show()
+        self._perm_status.setText("")
+        self._refresh_permission_button()
+
+    def _render_flags(self, flags: tuple[CombinationFlag, ...]) -> None:
+        """Show the combination flags prominently, descriptions verbatim."""
+        self._clear_layout(self._flags_layout)
+        if not flags:
+            self._flags_box.hide()
+            return
+        self._flags_box.show()
+        for flag in flags:
+            row = QWidget()
+            row.setObjectName("permFlag")
+            row_layout = QVBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(1)
+            flag_id = QLabel(flag.flag_id)
+            flag_id.setObjectName("statusWarn")
+            flag_id.setTextFormat(Qt.TextFormat.PlainText)
+            row_layout.addWidget(flag_id)
+            description = QLabel(flag.description)
+            description.setObjectName("permFlagDesc")
+            description.setWordWrap(True)
+            description.setTextFormat(Qt.TextFormat.PlainText)
+            row_layout.addWidget(description)
+            self._flags_layout.addWidget(row)
+
+    def _render_permission_groups(self, permissions: tuple[PermissionEntry, ...]) -> None:
+        """Render the permission list grouped by type; "Unknown" stays its
+        own explicit state, never collapsed into Granted/Not granted."""
+        self._clear_layout(self._perms_layout)
+        if not permissions:
+            self._perms_empty.show()
+            return
+        grouped: dict[str, list[PermissionEntry]] = {key: [] for key in _PERMISSION_GROUP_ORDER}
+        for entry in permissions:
+            grouped.setdefault(entry.permission_type, []).append(entry)
+        for permission_type in _PERMISSION_GROUP_ORDER:
+            entries = grouped.get(permission_type)
+            if not entries:
+                continue
+            title = QLabel(
+                f"{_PERMISSION_GROUP_TITLES.get(permission_type, permission_type)} "
+                f"({len(entries)})"
+            )
+            title.setObjectName("permGroupTitle")
+            title.setTextFormat(Qt.TextFormat.PlainText)
+            self._perms_layout.addWidget(title)
+            for entry in entries:
+                row = QWidget()
+                row.setObjectName("permRow")
+                row_layout = QHBoxLayout(row)
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                name = QLabel(entry.name)
+                name.setObjectName("permName")
+                name.setWordWrap(True)
+                name.setTextFormat(Qt.TextFormat.PlainText)
+                row_layout.addWidget(name, 1)
+                granted = _GRANTED_LABELS.get(entry.granted, "Unknown")
+                state = QLabel(granted)
+                state.setTextFormat(Qt.TextFormat.PlainText)
+                if entry.granted is True:
+                    state.setObjectName("statusConnected")
+                elif entry.granted is False:
+                    state.setObjectName("muted")
+                else:
+                    state.setObjectName("statusWarn")
+                row_layout.addWidget(state)
+                self._perms_layout.addWidget(row)
+
+    @staticmethod
+    def _clear_layout(layout) -> None:
+        """Remove every child widget of *layout*.
+
+        Each widget is hidden and detached first, then scheduled for
+        deletion — hidden detaches it from presentation immediately, so
+        caller-side lookups never see stale content while the Qt event
+        loop decides when to actually release the widget.
+        """
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+                widget.setParent(None)
+                widget.deleteLater()
+
+    @staticmethod
+    def _restyle(label: QLabel) -> None:
+        style = label.style()
+        style.unpolish(label)
+        style.polish(label)

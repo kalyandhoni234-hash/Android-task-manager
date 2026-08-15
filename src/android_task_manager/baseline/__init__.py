@@ -11,6 +11,23 @@ not-yet-built features.
 """
 
 from .diff import diff_snapshot
+from .matching import new_process_refs, new_socket_identities
+from .export import (
+    Session,
+    drift_event_from_dict,
+    drift_event_to_dict,
+    drift_events_to_csv,
+    drift_report_from_dict,
+    drift_report_to_dict,
+    from_json,
+    session_from_dict,
+    session_to_dict,
+    snapshot_from_dict,
+    snapshot_to_dict,
+    to_json,
+    write_drift_events_csv,
+    write_session_json,
+)
 from .models import (
     CATEGORY_PACKAGE,
     CATEGORY_PROCESS,
@@ -39,7 +56,23 @@ __all__ = [
     "DriftReport",
     "PackageIdentity",
     "ProcessRef",
+    "Session",
     "SocketIdentity",
     "build_snapshot",
     "diff_snapshot",
+    "drift_event_from_dict",
+    "drift_event_to_dict",
+    "drift_events_to_csv",
+    "drift_report_from_dict",
+    "drift_report_to_dict",
+    "from_json",
+    "new_process_refs",
+    "new_socket_identities",
+    "session_from_dict",
+    "session_to_dict",
+    "snapshot_from_dict",
+    "snapshot_to_dict",
+    "to_json",
+    "write_drift_events_csv",
+    "write_session_json",
 ]

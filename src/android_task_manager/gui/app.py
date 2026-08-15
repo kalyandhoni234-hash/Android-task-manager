@@ -96,9 +96,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         from PySide6.QtWidgets import QApplication
 
         from .action_worker import ActionWorker
+        from .baseline_worker import BaselineWorker
         from .inspector_worker import ProcessInspectionWorker
+        from .permission_worker import PermissionWorker
 
-        from .main_window import MainWindow, wire, wire_actions, wire_inspector
+        from .main_window import (
+            MainWindow,
+            wire,
+            wire_actions,
+            wire_inspector,
+            wire_permissions,
+            wire_security,
+        )
         from .monitor import MonitorWorker
         from .styles import DARK_STYLE
     except ImportError:
@@ -139,9 +148,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     inspector = ProcessInspectionWorker(connection=connection, timeout=args.timeout)
     actions = ActionWorker(connection=connection, timeout=args.timeout)
+    baseline_worker = BaselineWorker(connection=connection, timeout=args.timeout)
+    permission_worker = PermissionWorker(connection=connection, timeout=args.timeout)
     wire(window, worker)
     wire_inspector(window, inspector)
     wire_actions(window, worker, actions)
+    wire_security(window, baseline_worker)
+    wire_permissions(window, permission_worker)
 
     # First-run setup flow: the window asks; the shared connection + worker
     # react. Retry/relocate/device-pick are delivered onto the worker thread.
@@ -185,6 +198,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     actions_thread = QThread()
     actions.moveToThread(actions_thread)
 
+    baseline_thread = QThread()
+    baseline_worker.moveToThread(baseline_thread)
+
+    permission_thread = QThread()
+    permission_worker.moveToThread(permission_thread)
+
     def shutdown() -> None:
         worker.stop()
         thread.quit()
@@ -193,12 +212,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         inspector_thread.wait(3000)
         actions_thread.quit()
         actions_thread.wait(3000)
+        baseline_thread.quit()
+        baseline_thread.wait(3000)
+        permission_thread.quit()
+        permission_thread.wait(3000)
 
     app.aboutToQuit.connect(shutdown)
 
     thread.start()
     inspector_thread.start()
     actions_thread.start()
+    baseline_thread.start()
+    permission_thread.start()
     window.show()
     return app.exec()
 

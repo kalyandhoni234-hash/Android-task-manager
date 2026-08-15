@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QHeaderView,
     QLineEdit,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...baseline import ProcessRef
 from ...network_investigation.models import NetworkInvestigationSnapshot
 from ...process.inspector_models import ProcessInspectionSnapshot
 from ...process.models import ProcessSnapshot
@@ -50,6 +52,14 @@ _DEFAULT_SORT_ORDER = Qt.SortOrder.DescendingOrder
 #: appears in ps/top NAME/ARGS. A ``toybox top -n 1`` variant is also
 #: recognised; anything else (e.g. plain ``top``, ``top -n 2``) is untouched.
 _MONITOR_COMMAND_RE = re.compile(r"^(?:toybox\s+)?top\s+-n\s+1$")
+
+#: Cell badge text for rows matching a NEW drift event (identity-stable:
+#: uid + name + classification, never PID).
+_NEW_BADGE = "[NEW] "
+#: Subtle row tint for badge rows, kept inside the existing dark palette.
+_NEW_BACKGROUND = QColor("#2f3d35")
+#: Tooltip explaining the badge (never a verdict, just the drift fact).
+_NEW_TOOLTIP = "New process since the baseline was saved."
 
 
 def _is_monitor_process(process) -> bool:
@@ -103,6 +113,9 @@ class ProcessWidget(QWidget):
         self._sort_column = _DEFAULT_SORT_COLUMN
         self._sort_order = _DEFAULT_SORT_ORDER
         self._inspected_pid: int | None = None
+        #: ProcessRef identities NEW since the baseline; their rows get the
+        #: badge. Empty when no baseline/drift state exists.
+        self._new_process_refs: frozenset[ProcessRef] = frozenset()
 
         self._filter = QLineEdit()
         self._filter.setObjectName("processFilter")
@@ -210,11 +223,28 @@ class ProcessWidget(QWidget):
         ]
         self._rebuild()
 
+    def set_new_process_refs(self, refs: frozenset[ProcessRef]) -> None:
+        """Set the NEW identities to badge; an empty set clears all badges.
+
+        The badge is a row highlight on the existing table — the table is
+        not replaced by (or re-populated from) a separate drift view.
+        """
+        self._new_process_refs = frozenset(refs)
+        self._rebuild()
+
     def _rebuild(self) -> None:
         visible = [p for p in self._all_processes if self._matches_filter(p)]
         self._table.setSortingEnabled(False)
         self._table.setRowCount(len(visible))
         for row_index, process in enumerate(visible):
+            is_new = (
+                ProcessRef(
+                    uid=process.uid,
+                    process_name=process.name,
+                    classification=process.category,
+                )
+                in self._new_process_refs
+            )
             cpu = process.cpu_percent
             mem = process.memory_percent
             values = (
@@ -228,10 +258,16 @@ class ProcessWidget(QWidget):
                     mem if mem is not None else float("-inf"),
                 ),
                 _SortableItem(process.state or "-", (process.state or "-").lower()),
-                _SortableItem(process.name, (process.name or "").lower()),
+                _SortableItem(
+                    (_NEW_BADGE + process.name) if is_new else process.name,
+                    (process.name or "").lower(),
+                ),
             )
             for column, item in enumerate(values):
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if is_new:
+                    item.setBackground(QBrush(_NEW_BACKGROUND))
+                    item.setToolTip(_NEW_TOOLTIP)
                 self._table.setItem(row_index, column, item)
         self._table.setSortingEnabled(True)
         self._table.sortItems(self._sort_column, self._sort_order)
