@@ -356,7 +356,7 @@ MIT — see [LICENSE](LICENSE).
 **Guru Sharan Kalyan** — B.Tech CSE (Cyber Security), Government Engineering College Ajmer.
 
 - GitHub: [kalyandhoni234-hash](https://github.com/kalyandhoni234-hash)
-- LinkedIn: [Guru Sharan Kalyan](https://www.linkedin.com/in/kalyan-guru-sharan-84766629b/)
+- LinkedIn: [Guru Sharan Kalyan](https://www.linkedin.com/in/guru-sharan-kalyan-gr718/)
 
 ---
 
