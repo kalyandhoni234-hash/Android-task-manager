@@ -32,7 +32,9 @@ class ProcessCollector:
         NOT collected here — it is expensive and reserved for a future on-demand
         operation.
         """
-        ps_text = self._runner.shell(["ps", "-A", "-o", "PID,UID,NAME"], timeout=self._timeout)
+        ps_text = self._runner.shell(
+            ["ps", "-A", "-o", "PID,PPID,UID,NAME"], timeout=self._timeout
+        )
         top_text = self._runner.shell(["top", "-n", "1"], timeout=self._timeout)
 
         identities = parse_ps_output(ps_text)
@@ -81,6 +83,7 @@ def _merge(
                 cpu_percent=cpu.cpu_percent,
                 memory_percent=cpu.memory_percent,
                 category=classify_process(name, uid),
+                ppid=identity.ppid if identity is not None else None,
             )
         )
 

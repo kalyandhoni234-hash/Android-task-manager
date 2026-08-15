@@ -45,12 +45,17 @@ class ProcessParseError(ValueError):
 # ---------------------------------------------------------------------------
 
 def parse_ps_output(text: str) -> list[ProcessIdentity]:
-    """Parse ``ps -A -o PID,UID,NAME`` into process identities.
+    """Parse ``ps -A -o PID,PPID,UID,NAME`` into process identities.
 
     The header row and blank lines are ignored. Any number of extra columns or
-    spaces is tolerated; the NAME is everything after PID/UID so command names
-    containing spaces survive. Rows with a non-numeric PID or UID are skipped.
-    On duplicate PIDs the first occurrence wins.
+    spaces is tolerated; the NAME is everything after the leading numeric
+    columns so command names containing spaces survive. Rows with a
+    non-numeric PID, PPID or UID are skipped. On duplicate PIDs the first
+    occurrence wins.
+
+    Both the current four-column layout (PID PPID UID NAME) and the older
+    three-column layout (PID UID NAME) are accepted; three-column rows get
+    ``ppid=None`` (a parent was not collected — never inferred).
     """
     identities: list[ProcessIdentity] = []
     seen_pids: set[int] = set()
@@ -65,7 +70,14 @@ def parse_ps_output(text: str) -> list[ProcessIdentity]:
 
         try:
             pid = int(tokens[0])
-            uid = int(tokens[1])
+            if len(tokens) >= 4:
+                ppid = int(tokens[1])
+                uid = int(tokens[2])
+                name = " ".join(tokens[3:])
+            else:
+                ppid = None
+                uid = int(tokens[1])
+                name = " ".join(tokens[2:])
         except ValueError:
             continue  # malformed row — skip, don't crash the monitor
 
@@ -73,8 +85,7 @@ def parse_ps_output(text: str) -> list[ProcessIdentity]:
             continue  # duplicate PID: first wins
         seen_pids.add(pid)
 
-        name = " ".join(tokens[2:])
-        identities.append(ProcessIdentity(pid=pid, uid=uid, name=name))
+        identities.append(ProcessIdentity(pid=pid, uid=uid, name=name, ppid=ppid))
 
     return identities
 

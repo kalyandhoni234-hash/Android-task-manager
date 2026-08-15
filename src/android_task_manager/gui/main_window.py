@@ -25,12 +25,22 @@ from ..baseline import (
     new_process_refs,
     new_socket_identities,
 )
+from ..baseline.models import (
+    CATEGORY_PROCESS,
+    CATEGORY_SOCKET,
+)
 from ..battery.models import BatterySnapshot
 from ..cpu.models import CPUSnapshot
 from ..heuristics import HeuristicReport
 from ..incident.builder import build_incident_report
 from ..incident.models import SOURCE_GUI, IncidentReport
 from ..incident.renderers import report_filename
+from ..investigation.attribution import attribute_sockets
+from ..investigation.explain import entity_stability_for, explain_signal
+from ..investigation.models import StabilityReport
+from ..investigation.stability import ObservationTracker, stabilize_drift
+from ..investigation.timeline import build_investigation_timeline
+from ..investigation.tree import build_process_tree
 from ..memory.models import MemorySnapshot
 from ..network.models import NetworkSnapshot
 from ..network_investigation.models import NetworkInvestigationSnapshot
@@ -39,9 +49,12 @@ from ..process.inspector_models import ProcessInspectionSnapshot
 from ..process.models import ProcessSnapshot
 from ..updater import UpdateCheckResult
 from .incident_dialog import IncidentDialog
+from .investigation_dialog import InvestigationDialog
 from .monitor import ConnectionState, MonitorWorker
+from .process_tree_dialog import ProcessTreeDialog
 from .setup_panel import INSTALL_ADB_STEPS, USB_DEBUGGING_STEPS, SetupPanel
 from .update_banner import UpdateBanner
+from .why_flagged_dialog import WhyFlaggedDialog
 from .widgets.baseline_panel import BaselinePanel
 from .widgets.battery_widget import BatteryWidget
 from .widgets.cpu_widget import CPUWidget
@@ -145,11 +158,23 @@ class MainWindow(QMainWindow):
         self._device_label: str | None = None
         self._android_version: str | None = None
 
+        #: Investigation-core GUI-layer state: the observation window fed
+        #: by the monitor (deduped, bounded), the stability reports of the
+        #: last drift check, and the lazily created investigation dialogs.
+        self._observation_tracker = ObservationTracker()
+        self._stability: dict[str, StabilityReport] | None = None
+        self._investigation_dialog: InvestigationDialog | None = None
+        self._process_tree_dialog: ProcessTreeDialog | None = None
+        self._why_dialog: WhyFlaggedDialog | None = None
+
         self.processes.inspection_requested.connect(self.inspect_requested.emit)
         self.processes.inspector.action_requested.connect(self._on_action_clicked)
         self.security.save_requested.connect(self._on_security_save_requested)
         self.security.check_requested.connect(self._on_security_check_requested)
         self.security.export_requested.connect(self._on_export_requested)
+        self.security.timeline_requested.connect(self._on_timeline_requested)
+        self.security.process_tree_requested.connect(self._on_process_tree_requested)
+        self.security.why_requested.connect(self._on_why_requested)
         self.processes.inspector.permission_audit_requested.connect(
             self.permission_audit_requested.emit
         )
@@ -208,6 +233,10 @@ class MainWindow(QMainWindow):
         if processes is not None:
             self._latest_processes = processes
             self.processes.set_snapshot(processes)
+            # Feed the investigation core's observation window (pure and
+            # cheap; failures re-emit the cached snapshot with the same
+            # timestamp, which the tracker dedupes).
+            self._observation_tracker.record_process_snapshot(processes)
         if battery is not None:
             self.battery.set_snapshot(battery)
         if network is not None:
@@ -224,6 +253,7 @@ class MainWindow(QMainWindow):
         """Refresh the UID-attributed socket view, including an open panel."""
         self._latest_network_investigation = snapshot
         self.processes.inspector.set_network_data(snapshot)
+        self._observation_tracker.record_network_snapshot(snapshot)
 
     def update_devices(self, devices: list[dict[str, str]]) -> None:
         """Fill the multi-device picker on the setup screen."""
@@ -326,6 +356,8 @@ class MainWindow(QMainWindow):
         self._baseline = snapshot
         self._current_snapshot = None
         self._drift_report = None
+        self._observation_tracker.reset()
+        self._stability = None
         self.security.set_baseline(snapshot)
         self.processes.set_new_process_refs(frozenset())
         self.processes.inspector.set_new_socket_identities(frozenset())
@@ -359,11 +391,44 @@ class MainWindow(QMainWindow):
         self.incident.set_generation_available(True)
         if self._baseline is None:
             return
+        self._record_check_observations(current)
+        self._stability = stabilize_drift(
+            report,
+            self._baseline,
+            current,
+            series={
+                CATEGORY_PROCESS: self._observation_tracker.series(CATEGORY_PROCESS),
+                CATEGORY_SOCKET: self._observation_tracker.series(CATEGORY_SOCKET),
+            },
+        )
         self.processes.set_new_process_refs(
             new_process_refs(report, self._baseline, current)
         )
         self.processes.inspector.set_new_socket_identities(
             new_socket_identities(report, self._baseline, current)
+        )
+
+    def _record_check_observations(self, current: BaselineSnapshot) -> None:
+        """Append the drift-check's own snapshot to the observation window
+        with its true completeness (verified -> COMPLETE, unverified with
+        items -> PARTIAL, unverified and empty -> FAILED)."""
+        from ..investigation.completeness import baseline_category_completeness
+
+        timestamp = current.created_at.timestamp()
+        self._observation_tracker.record(
+            CATEGORY_PROCESS,
+            baseline_category_completeness(current, CATEGORY_PROCESS),
+            sorted(current.processes, key=lambda p: (p.process_name, p.uid)),
+            timestamp=timestamp,
+        )
+        self._observation_tracker.record(
+            CATEGORY_SOCKET,
+            baseline_category_completeness(current, CATEGORY_SOCKET),
+            sorted(
+                current.sockets,
+                key=lambda s: (s.protocol, s.local_address, s.local_port),
+            ),
+            timestamp=timestamp,
         )
 
     def on_drift_failed(self, message: str) -> None:
@@ -451,6 +516,7 @@ class MainWindow(QMainWindow):
             permission_audits=tuple(self._permission_audits),
             network_investigation=self._latest_network_investigation,
             process_snapshot=self._latest_processes,
+            stability=tuple(self._stability.values()) if self._stability else None,
             source=SOURCE_GUI,
             device_label=self._device_label,
             android_version=self._android_version,
@@ -506,6 +572,128 @@ class MainWindow(QMainWindow):
         self.incident.show_export_result(success, message)
         if self._incident_dialog is not None:
             self._incident_dialog.show_export_result(success, message)
+
+    # ------------------------------------------------------------------
+    # Investigation-core handlers (GUI thread; pure in-memory aggregation)
+    # ------------------------------------------------------------------
+
+    def _on_timeline_requested(self) -> None:
+        """Open the investigation timeline for the current session.
+
+        Like incident generation this is a pure, fast, deterministic
+        aggregation of already-collected data — no device I/O, so it
+        needs no worker.
+        """
+        if self._baseline is None or self._current_snapshot is None or self._drift_report is None:
+            return
+        session = Session(
+            baseline=self._baseline,
+            current=self._current_snapshot,
+            drift_report=self._drift_report,
+        )
+        events = build_investigation_timeline(
+            session=session,
+            heuristics=self._heuristics,
+            stability=self._stability,
+            audits=tuple(self._permission_audits),
+        )
+        if self._investigation_dialog is None:
+            self._investigation_dialog = InvestigationDialog(self)
+        self._investigation_dialog.show_timeline(events)
+        self._investigation_dialog.show()
+        self._investigation_dialog.raise_()
+        self._investigation_dialog.activateWindow()
+
+    def _on_process_tree_requested(self) -> None:
+        """Open the read-only process hierarchy of the latest snapshot."""
+        if self._latest_processes is None:
+            return
+        tree = build_process_tree(self._latest_processes)
+        if self._process_tree_dialog is None:
+            self._process_tree_dialog = ProcessTreeDialog(self)
+        self._process_tree_dialog.show_tree(
+            tree, self._latest_network_investigation
+        )
+        self._process_tree_dialog.show()
+        self._process_tree_dialog.raise_()
+        self._process_tree_dialog.activateWindow()
+
+    def _on_why_requested(self, signal) -> None:
+        """Open the evidence facts behind one signal.
+
+        The explanation is derived only from collected data; when the
+        entity cannot be resolved the dialog says so honestly.
+        """
+        if self._baseline is None or self._current_snapshot is None or self._drift_report is None:
+            return
+        if self._why_dialog is None:
+            self._why_dialog = WhyFlaggedDialog(self)
+        explanation = explain_signal(
+            signal,
+            baseline=self._baseline,
+            current=self._current_snapshot,
+            drift=self._drift_report,
+            processes=self._latest_processes,
+            network_investigation=self._latest_network_investigation,
+            audits=tuple(self._permission_audits),
+            attribution=self._attribution_for_entity(signal.entity),
+            entity_stability=self._stability_for_entity(signal.entity),
+        )
+        self._why_dialog.show_explanation(signal, explanation)
+        self._why_dialog.show()
+        self._why_dialog.raise_()
+        self._why_dialog.activateWindow()
+
+    def _attribution_for_entity(self, entity: str):
+        """UID/PID attribution for a socket entity key, or None."""
+        socket = self._socket_identity_for_entity(entity)
+        if socket is None:
+            return None
+        attributed = attribute_sockets(
+            (socket,),
+            processes=self._latest_processes,
+            uid_packages=(
+                self._latest_network_investigation.uid_packages
+                if self._latest_network_investigation is not None
+                else None
+            ),
+            baseline=self._baseline,
+            current=self._current_snapshot,
+        )
+        return attributed.get(socket)
+
+    def _socket_identity_for_entity(self, entity: str):
+        """Resolve a ``protocol:address:port`` entity to a SocketIdentity."""
+        parts = entity.split(":")
+        if len(parts) != 3:
+            return None
+        protocol, address, port = parts
+        try:
+            port_value = int(port)
+        except ValueError:
+            return None
+        candidates = [
+            s
+            for s in self._current_snapshot.sockets
+            if s.protocol == protocol and s.local_address == address and s.local_port == port_value
+        ]
+        if not candidates:
+            return None
+        return sorted(
+            candidates,
+            key=lambda s: (s.remote_address or "", s.remote_port or -1, s.state or ""),
+        )[0]
+
+    def _stability_for_entity(self, entity: str):
+        """The stability record for an entity key across categories."""
+        if not self._stability:
+            return None
+        records = [
+            record
+            for report in self._stability.values()
+            for record in report.entities
+        ]
+        return entity_stability_for(entity, records)
 
     # ------------------------------------------------------------------
     # Update check (one-shot, background worker, silent failures)

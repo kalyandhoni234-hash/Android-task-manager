@@ -25,6 +25,7 @@ from .models import (
     Finding,
     IncidentReport,
     IntegrityMetadata,
+    InvestigationSection,
     NetworkEvidence,
     PackageEvidence,
     PermissionEvidence,
@@ -50,6 +51,7 @@ _PAYLOAD_KEYS = (
     "package_evidence",
     "permission_evidence",
     "recommendations",
+    "investigation",
     "integrity",
 )
 
@@ -224,6 +226,15 @@ def _integrity_to_dict(item: IntegrityMetadata) -> dict[str, Any]:
     }
 
 
+def _investigation_to_dict(section: InvestigationSection) -> dict[str, Any]:
+    return {
+        "meaningful_drift_count": section.meaningful_drift_count,
+        "transient_drift_count": section.transient_drift_count,
+        "uncertain_drift_count": section.uncertain_drift_count,
+        "stability_summary": section.stability_summary,
+    }
+
+
 def report_to_dict(report: IncidentReport) -> dict[str, Any]:
     """Serialize a report to a JSON-ready dict with a fixed key order."""
     return {
@@ -241,6 +252,11 @@ def report_to_dict(report: IncidentReport) -> dict[str, Any]:
             _permission_evidence_to_dict(r) for r in report.permission_evidence
         ],
         "recommendations": [_recommendation_to_dict(r) for r in report.recommendations],
+        "investigation": (
+            _investigation_to_dict(report.investigation)
+            if report.investigation is not None
+            else None
+        ),
         "integrity": _integrity_to_dict(report.integrity) if report.integrity is not None else None,
     }
 
@@ -459,6 +475,24 @@ def html_report(report: IncidentReport) -> str:
             "<h2>Recommended Investigation</h2>"
             "<p class='muted'>No investigation steps are required for this session.</p>"
         )
+    if report.investigation is not None:
+        inv = report.investigation
+        investigation_section = (
+            "<div class='section'>\n"
+            "<h2>Drift Stability</h2>"
+            "<table><tr><th>Meaningful</th><th>Transient</th>"
+            "<th>Unconfirmed</th></tr>"
+            f"<tr><td>{inv.meaningful_drift_count}</td>"
+            f"<td>{inv.transient_drift_count}</td>"
+            f"<td>{inv.uncertain_drift_count}</td></tr></table>"
+            f"<p>{_esc(inv.stability_summary)}</p>"
+            "<p class='muted'>Transient and unconfirmed changes are listed in the "
+            "timeline (TRANSIENT_CHANGE / NOT_OBSERVED) and were not promoted "
+            "to findings.</p>"
+            "</div>\n"
+        )
+    else:
+        investigation_section = ""
 
     return (
         "<!DOCTYPE html>\n"
@@ -508,6 +542,7 @@ def html_report(report: IncidentReport) -> str:
         + package_section
         + permission_section
         + recommendation_section
+        + investigation_section
         + _integrity_html(integrity)
         + "<footer>"
         "This report is an investigation artifact generated from observed telemetry. "

@@ -36,8 +36,9 @@ from ..network_investigation.models import SocketInfo
 from ..permissions.models import CombinationFlag, PermissionEntry
 
 #: Stable schema version of the report. Bump only on breaking changes to the
-#: serialized structure (renderers must keep emitting it).
-SCHEMA_VERSION = 1
+#: serialized structure (renderers must keep emitting it). v2 adds the
+#: optional ``investigation`` stability section.
+SCHEMA_VERSION = 2
 
 #: Report generation sources (vocabulary; the GUI emits SOURCE_GUI).
 SOURCE_GUI = "gui"
@@ -51,6 +52,10 @@ EVENT_DRIFT_CHECKED = "DRIFT_CHECKED"
 EVENT_HEURISTICS_EVALUATED = "HEURISTICS_EVALUATED"
 EVENT_SIGNAL_GENERATED = "SIGNAL_GENERATED"
 EVENT_PERMISSION_AUDITED = "PERMISSION_AUDITED"
+#: Stability-annotated drift events (investigation core, v2).
+EVENT_TRANSIENT_CHANGE = "TRANSIENT_CHANGE"
+EVENT_NOT_OBSERVED = "NOT_OBSERVED"
+EVENT_STABILITY_ANALYZED = "STABILITY_ANALYZED"
 
 #: Finding types (stable schema keys).
 FINDING_SUSPICIOUS_SIGNAL = "SUSPICIOUS_SIGNAL"
@@ -284,6 +289,24 @@ class Recommendation:
 
 
 @dataclass(frozen=True)
+class InvestigationSection:
+    """Stability analysis of the session's drift (investigation core).
+
+    Present only when the caller supplied the stability reports; the raw
+    ``findings`` still contain every meaningful drift change, while
+    transient and unconfirmed changes appear in the timeline with
+    ``EVENT_TRANSIENT_CHANGE`` / ``EVENT_NOT_OBSERVED`` types instead of
+    being promoted to findings.
+    """
+
+    meaningful_drift_count: int
+    transient_drift_count: int
+    uncertain_drift_count: int
+    #: Deterministic, per-category summary sentence(s) joined by spaces.
+    stability_summary: str
+
+
+@dataclass(frozen=True)
 class IntegrityMetadata:
     """Integrity metadata for the exported artifact.
 
@@ -318,6 +341,7 @@ class IncidentReport:
     package_evidence: tuple[PackageEvidence, ...] = ()
     permission_evidence: tuple[PermissionEvidence, ...] = ()
     recommendations: tuple[Recommendation, ...] = ()
+    investigation: InvestigationSection | None = None
     integrity: IntegrityMetadata | None = None
 
 
@@ -332,8 +356,11 @@ __all__ = [
     "EVENT_DRIFT_CHECKED",
     "EVENT_DRIFT_EVENT",
     "EVENT_HEURISTICS_EVALUATED",
+    "EVENT_NOT_OBSERVED",
     "EVENT_PERMISSION_AUDITED",
     "EVENT_SIGNAL_GENERATED",
+    "EVENT_STABILITY_ANALYZED",
+    "EVENT_TRANSIENT_CHANGE",
     "FINDING_DRIFT",
     "FINDING_PERMISSION_COMBINATION",
     "FINDING_SUSPICIOUS_SIGNAL",
@@ -351,6 +378,7 @@ __all__ = [
     "Finding",
     "IncidentReport",
     "IntegrityMetadata",
+    "InvestigationSection",
     "NetworkEvidence",
     "PackageEvidence",
     "PermissionEvidence",

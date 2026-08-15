@@ -25,11 +25,16 @@ class ProcessCategory(Enum):
 
 @dataclass(frozen=True)
 class ProcessIdentity:
-    """A process as reported by ``ps -A -o PID,UID,NAME`` (authoritative)."""
+    """A process as reported by ``ps -A -o PID,PPID,UID,NAME``.
+
+    ``ppid`` is ``None`` only when the collector could not provide a
+    parent (e.g. output without a PPID column) — never inferred.
+    """
 
     pid: int
     uid: int
     name: str
+    ppid: int | None = None
 
 
 @dataclass(frozen=True)
@@ -56,6 +61,7 @@ class ProcessInfo:
     cpu_percent: float | None
     memory_percent: float | None
     category: ProcessCategory
+    ppid: int | None = None
 
 
 @dataclass(frozen=True)

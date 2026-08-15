@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 
 from android_task_manager.incident.builder import build_incident_report
+from android_task_manager.incident.models import SCHEMA_VERSION
 from android_task_manager.incident.renderers import (
     html_report,
     json_report,
@@ -34,6 +35,7 @@ _TOP_LEVEL_KEYS = {
     "package_evidence",
     "permission_evidence",
     "recommendations",
+    "investigation",
     "integrity",
 }
 
@@ -51,7 +53,9 @@ def test_json_is_valid_and_stable() -> None:
     for key in ("a", "b", "c", "d", "e", "f", "g", "h", "i", "j"):
         payload = json.loads(json_report(_report(key)))
         assert set(payload) == _TOP_LEVEL_KEYS, f"scenario {key}: schema drift"
-        assert payload["schema_version"] == 1
+        assert payload["schema_version"] == SCHEMA_VERSION
+        # v1 scenarios carry no stability data: the section stays null.
+        assert payload["investigation"] is None
         # No Python object repr leaks into the payload.
         assert " at 0x" not in json.dumps(payload)
 

@@ -53,6 +53,12 @@ class BaselinePanel(QWidget):
     check_requested = Signal(object)
     #: ("json" | "csv") the user asked to export the last session.
     export_requested = Signal(str)
+    #: The user asked to open the investigation timeline dialog.
+    timeline_requested = Signal()
+    #: The user asked to open the process-tree dialog.
+    process_tree_requested = Signal()
+    #: (SuspiciousSignal) the user asked "why was this flagged?" for a signal.
+    why_requested = Signal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -123,6 +129,19 @@ class BaselinePanel(QWidget):
         export_row.addStretch(1)
         layout.addLayout(export_row)
 
+        investigation_title = QLabel("INVESTIGATION")
+        investigation_title.setObjectName("sectionTitle")
+        layout.addWidget(investigation_title)
+
+        investigation_row = QHBoxLayout()
+        investigation_row.setSpacing(8)
+        self._timeline_btn = self._make_button("View Timeline", "timelineBtn")
+        self._tree_btn = self._make_button("Process Tree", "processTreeBtn")
+        investigation_row.addWidget(self._timeline_btn)
+        investigation_row.addWidget(self._tree_btn)
+        investigation_row.addStretch(1)
+        layout.addLayout(investigation_row)
+
         self._status = QLabel("")
         self._status.setObjectName("muted")
         self._status.setWordWrap(True)
@@ -132,6 +151,8 @@ class BaselinePanel(QWidget):
         self._check_btn.clicked.connect(self._on_check_clicked)
         self._json_btn.clicked.connect(lambda: self._on_export_clicked("json"))
         self._csv_btn.clicked.connect(lambda: self._on_export_clicked("csv"))
+        self._timeline_btn.clicked.connect(self._on_timeline_clicked)
+        self._tree_btn.clicked.connect(self._on_tree_clicked)
 
         self._baseline: BaselineSnapshot | None = None
         self._report: DriftReport | None = None
@@ -293,6 +314,13 @@ class BaselinePanel(QWidget):
         entity.setTextFormat(Qt.TextFormat.PlainText)
         head.addWidget(severity)
         head.addWidget(entity, 1)
+        why_btn = QPushButton("Why?")
+        why_btn.setObjectName("secondary")
+        why_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        why_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        why_btn.setToolTip("Show the evidence facts behind this signal")
+        why_btn.clicked.connect(lambda checked=False, s=signal: self.why_requested.emit(s))
+        head.addWidget(why_btn)
         row_layout.addLayout(head)
 
         reason = QLabel(signal.reason)
@@ -321,9 +349,24 @@ class BaselinePanel(QWidget):
             return
         self.export_requested.emit(kind)
 
+    def _on_timeline_clicked(self) -> None:
+        if self._operation_busy or self._exporting or self._report is None:
+            return
+        self.timeline_requested.emit()
+
+    def _on_tree_clicked(self) -> None:
+        if self._operation_busy or self._exporting or self._report is None:
+            return
+        self.process_tree_requested.emit()
+
     def _refresh_buttons(self) -> None:
         busy = self._operation_busy or self._exporting
         self._save_btn.setEnabled(not busy)
         self._check_btn.setEnabled(self._baseline is not None and not busy)
         self._json_btn.setEnabled(self._report is not None and not busy)
         self._csv_btn.setEnabled(self._report is not None and not busy)
+        # Investigation views need a completed drift check (timeline data);
+        # the tree additionally needs a process sample, which MainWindow
+        # guards when opening the dialog.
+        self._timeline_btn.setEnabled(self._report is not None and not busy)
+        self._tree_btn.setEnabled(self._report is not None and not busy)

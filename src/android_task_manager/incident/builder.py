@@ -44,6 +44,7 @@ from ..baseline.models import (
     SocketIdentity,
 )
 from ..heuristics.models import HeuristicReport
+from ..investigation.models import StabilityReport
 from ..network_investigation.models import NetworkInvestigationSnapshot, SocketInfo
 from ..permissions.models import PERMISSION_RUNTIME, PackagePermissionAudit
 from ..process.models import ProcessSnapshot
@@ -52,8 +53,11 @@ from .models import (
     EVENT_DRIFT_CHECKED,
     EVENT_DRIFT_EVENT,
     EVENT_HEURISTICS_EVALUATED,
+    EVENT_NOT_OBSERVED,
     EVENT_PERMISSION_AUDITED,
     EVENT_SIGNAL_GENERATED,
+    EVENT_STABILITY_ANALYZED,
+    EVENT_TRANSIENT_CHANGE,
     FINDING_DRIFT,
     FINDING_PERMISSION_COMBINATION,
     FINDING_SUSPICIOUS_SIGNAL,
@@ -65,6 +69,7 @@ from .models import (
     Finding,
     IncidentReport,
     IntegrityMetadata,
+    InvestigationSection,
     NetworkEvidence,
     PackageEvidence,
     PermissionEvidence,
@@ -79,13 +84,18 @@ from .models import (
 _SEVERITY_RANK = {"HIGH": 0, "MEDIUM": 1, "INFO": 2}
 
 #: Fixed timeline type order, for deterministic ties on equal timestamps.
+#: TRANSIENT_CHANGE / NOT_OBSERVED share the drift-event tie zone (1);
+#: STABILITY_ANALYZED follows the drift check (2).
 _TIMELINE_RANK = {
     EVENT_BASELINE_CREATED: 0,
     EVENT_DRIFT_EVENT: 1,
+    EVENT_TRANSIENT_CHANGE: 1,
+    EVENT_NOT_OBSERVED: 1,
     EVENT_DRIFT_CHECKED: 2,
-    EVENT_HEURISTICS_EVALUATED: 3,
-    EVENT_SIGNAL_GENERATED: 4,
-    EVENT_PERMISSION_AUDITED: 5,
+    EVENT_STABILITY_ANALYZED: 3,
+    EVENT_HEURISTICS_EVALUATED: 4,
+    EVENT_SIGNAL_GENERATED: 5,
+    EVENT_PERMISSION_AUDITED: 6,
 }
 
 #: Investigation recommendations per finding type/category/change — fixed
@@ -146,6 +156,7 @@ def build_incident_report(
     permission_audits: Sequence[PackagePermissionAudit] = (),
     network_investigation: NetworkInvestigationSnapshot | None = None,
     process_snapshot: ProcessSnapshot | None = None,
+    stability: Sequence[StabilityReport] | None = None,
     generated_at: datetime | None = None,
     sequence: int = 1,
     source: str = SOURCE_MANUAL,
@@ -157,6 +168,13 @@ def build_incident_report(
     All arguments are optional beyond *session*; missing inputs degrade the
     report honestly (fewer sections, "unavailable" values) instead of
     failing. Pure and deterministic: the same inputs yield the same report.
+
+    When *stability* (the investigation core's per-category stability
+    reports) is supplied, raw drift is promoted to findings only when it
+    is meaningful; transient and unconfirmed changes appear on the
+    timeline with dedicated event types and a non-persistent sentence in
+    the summary, plus the report's ``investigation`` section is filled.
+    Without *stability* the report behaves exactly like v1.
     """
     generated_at = generated_at or datetime.now(timezone.utc)
     report_id = f"ATM-{generated_at:%Y%m%d}-{sequence:03d}"
@@ -167,7 +185,8 @@ def build_incident_report(
 
     # -- 1. Findings (structured, ordered by severity then type/entity) -----
     drift_refs = _drift_event_refs(drift)
-    findings: list[Finding] = _build_drift_findings(drift, drift_refs)
+    buckets = _stability_buckets(stability)
+    findings: list[Finding] = _build_drift_findings(drift, drift_refs, buckets)
     if heuristics is not None:
         findings.extend(_build_signal_findings(heuristics, drift_refs))
     findings.extend(_build_permission_findings(permission_audits))
@@ -206,10 +225,11 @@ def build_incident_report(
     ]
 
     # -- 3. Timeline / summary / severity / recommendations ------------------
-    timeline = _build_timeline(session, heuristics, permission_audits)
+    timeline = _build_timeline(session, heuristics, permission_audits, stability, buckets)
     severity_summary = _build_severity_summary(findings)
-    summary = _build_summary(drift, heuristics, findings, severity_summary)
+    summary = _build_summary(drift, heuristics, findings, severity_summary, stability, buckets)
     recommendations = _build_recommendations(findings)
+    investigation = _build_investigation_section(stability, buckets)
 
     # -- 4. Device / metadata / integrity ------------------------------------
     device = DeviceInfo(
@@ -240,6 +260,7 @@ def build_incident_report(
         package_evidence=pkg_rows,
         permission_evidence=audit_rows,
         recommendations=recommendations,
+        investigation=investigation,
         integrity=None,
     )
     return _with_integrity(report, _build_integrity(report, generated_at))
@@ -256,14 +277,40 @@ def _drift_event_refs(report: DriftReport) -> dict[DriftEvent, str]:
     return {event: f"D-{index:03d}" for index, event in enumerate(ordered, start=1)}
 
 
+def _stability_buckets(
+    stability: Sequence[StabilityReport] | None,
+) -> dict[DriftEvent, str]:
+    """Map each raw drift event to its stability bucket.
+
+    Events of categories without a stability analysis (packages) are not
+    mapped — they remain meaningful by the diff engine's own rule.
+    """
+    if not stability:
+        return {}
+    buckets: dict[DriftEvent, str] = {}
+    for report in stability:
+        for event in report.meaningful_events:
+            buckets[event] = "meaningful"
+        for event in report.transient_events:
+            buckets[event] = "transient"
+        for event in report.uncertain_events:
+            buckets[event] = "uncertain"
+    return buckets
+
+
 def _build_drift_findings(
     drift: DriftReport,
     refs: dict[DriftEvent, str],
+    buckets: dict[DriftEvent, str],
 ) -> list[Finding]:
-    """Every drift event becomes an INFO finding that preserves the diff
-    engine's own explanation wording — facts are reported, not re-worded."""
+    """Every meaningful drift event becomes an INFO finding that preserves
+    the diff engine's own explanation wording — facts are reported, not
+    re-worded. With stability data, transient/unconfirmed events are left
+    out of the findings (they live on the timeline instead)."""
     findings: list[Finding] = []
     for event in sorted(drift.events, key=lambda e: (e.category, e.change_type, e.entity)):
+        if buckets and buckets.get(event) != "meaningful":
+            continue
         description = (
             event.explanation if event.explanation else f"{event.change_type} {event.category}"
         )
@@ -694,10 +741,17 @@ def _build_timeline(
     session: Session,
     heuristics: HeuristicReport | None,
     audits: Sequence[PackagePermissionAudit],
+    stability: Sequence[StabilityReport] | None = None,
+    buckets: dict[DriftEvent, str] | None = None,
 ) -> tuple[TimelineEvent, ...]:
     """Chronological timeline built only from real timestamps carried by
     the inputs — no timestamp is invented. Drift events are dated by the
-    drift check's ``compared_at`` (that is when they were reported)."""
+    drift check's ``compared_at`` (that is when they were reported).
+
+    With stability data, transient changes and unconfirmed changes get
+    their own event types (``EVENT_TRANSIENT_CHANGE`` /
+    ``EVENT_NOT_OBSERVED``) and a per-category ``EVENT_STABILITY_ANALYZED``
+    event is appended."""
     events: list[TimelineEvent] = [
         TimelineEvent(
             event_type=EVENT_BASELINE_CREATED,
@@ -710,18 +764,46 @@ def _build_timeline(
         session.drift_report.events,
         key=lambda e: (e.category, e.change_type, e.entity),
     ):
+        bucket = buckets.get(event) if stability else None
         description = (
             event.explanation if event.explanation else f"{event.change_type} {event.category}"
         )
-        events.append(
-            TimelineEvent(
-                event_type=EVENT_DRIFT_EVENT,
-                description=f"{description}: {event.entity}",
-                timestamp=session.drift_report.compared_at,
-                severity=event.severity,
-                entity=event.entity,
+        if bucket == "transient":
+            events.append(
+                TimelineEvent(
+                    event_type=EVENT_TRANSIENT_CHANGE,
+                    description=(
+                        f"Transient change observed: {event.entity} "
+                        "was not confirmed persistent."
+                    ),
+                    timestamp=session.drift_report.compared_at,
+                    severity=event.severity,
+                    entity=event.entity,
+                )
             )
-        )
+        elif bucket == "uncertain":
+            events.append(
+                TimelineEvent(
+                    event_type=EVENT_NOT_OBSERVED,
+                    description=(
+                        f"Change could not be confirmed: {event.entity} was not "
+                        "observed in a complete snapshot read."
+                    ),
+                    timestamp=session.drift_report.compared_at,
+                    severity=event.severity,
+                    entity=event.entity,
+                )
+            )
+        else:
+            events.append(
+                TimelineEvent(
+                    event_type=EVENT_DRIFT_EVENT,
+                    description=f"{description}: {event.entity}",
+                    timestamp=session.drift_report.compared_at,
+                    severity=event.severity,
+                    entity=event.entity,
+                )
+            )
     events.append(
         TimelineEvent(
             event_type=EVENT_DRIFT_CHECKED,
@@ -729,6 +811,20 @@ def _build_timeline(
             timestamp=session.drift_report.compared_at,
         )
     )
+    if stability:
+        for report in sorted(stability, key=lambda r: r.category):
+            events.append(
+                TimelineEvent(
+                    event_type=EVENT_STABILITY_ANALYZED,
+                    description=(
+                        f"Stability analyzed for {report.category} drift "
+                        f"({len(report.meaningful_events)} confirmed, "
+                        f"{len(report.transient_events)} transient, "
+                        f"{len(report.uncertain_events)} unconfirmed)."
+                    ),
+                    timestamp=session.drift_report.compared_at,
+                )
+            )
     if heuristics is not None:
         events.append(
             TimelineEvent(
@@ -788,12 +884,23 @@ def _build_summary(
     heuristics: HeuristicReport | None,
     findings: Sequence[Finding],
     severity: SeveritySummary,
+    stability: Sequence[StabilityReport] | None = None,
+    buckets: dict[DriftEvent, str] | None = None,
 ) -> ExecutiveSummary:
     signal_count = len(heuristics.signals) if heuristics is not None else 0
     parts = [
         f"The monitoring session identified {len(drift.events)} change(s) relative to "
         "the established baseline."
     ]
+    if stability and buckets:
+        non_persistent = sum(
+            1 for bucket in buckets.values() if bucket in ("transient", "uncertain")
+        )
+        if non_persistent:
+            parts.append(
+                f"{non_persistent} change(s) were observed and classified "
+                "as non-persistent."
+            )
     if heuristics is not None:
         parts.append(
             f"{signal_count} suspicious signal(s) were generated "
@@ -809,6 +916,25 @@ def _build_summary(
         signal_count=signal_count,
         finding_count=len(findings),
         heuristics_evaluated=heuristics is not None,
+    )
+
+
+def _build_investigation_section(
+    stability: Sequence[StabilityReport] | None,
+    buckets: dict[DriftEvent, str],
+) -> InvestigationSection | None:
+    """The report's stability section; ``None`` when no stability data."""
+    if not stability:
+        return None
+    meaningful = sum(1 for bucket in buckets.values() if bucket == "meaningful")
+    transient = sum(1 for bucket in buckets.values() if bucket == "transient")
+    uncertain = sum(1 for bucket in buckets.values() if bucket == "uncertain")
+    summaries = tuple(sorted(report.summary for report in stability))
+    return InvestigationSection(
+        meaningful_drift_count=meaningful,
+        transient_drift_count=transient,
+        uncertain_drift_count=uncertain,
+        stability_summary=" ".join(summaries),
     )
 
 
@@ -869,5 +995,6 @@ def _with_integrity(report: IncidentReport, integrity: IntegrityMetadata) -> Inc
         package_evidence=report.package_evidence,
         permission_evidence=report.permission_evidence,
         recommendations=report.recommendations,
+        investigation=report.investigation,
         integrity=integrity,
     )

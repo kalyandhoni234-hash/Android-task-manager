@@ -149,7 +149,7 @@ The key architectural rule: **collectors never invoke `subprocess` directly.** A
 | Device bridge | ADB (`adb shell`) | not bundled (see [Why is ADB not bundled?](#why-is-adb-not-bundled)) |
 | Term renderer | custom, dependency-light | `terminal/renderer.py` |
 | Windows packaging | PyInstaller ≥ 6 | one-file windowed + debug builds |
-| Tests | pytest ≥ 7 | 734 tests, fixture-driven, GUI headless |
+| Tests | pytest ≥ 7 | 806 tests, fixture-driven, GUI headless |
 | CI/CD | GitHub Actions | Linux matrix (3.10–3.12) + Windows release build |
 | Product site | Next.js 16 (static export) | hosted on GitHub Pages |
 
@@ -170,16 +170,19 @@ android-task-manager/
 │   ├── network_investigation/        # socket tables (tcp{,6},udp{,6}) + UID attribution
 │   ├── incident/                     # incident report: models (schema) · builder
 │   │                                 #   (deterministic aggregation) · renderers (JSON/HTML)
+│   ├── investigation/                # investigation core: drift stability · timeline ·
+│   │                                 #   attribution · why-flagged evidence · process tree
 │   ├── action/                       # package verification + Open App / App Info / Force Stop
 │   ├── terminal/                     # dependency-light text renderer
 │   ├── gui/                          # PySide6 dashboard: widgets/, workers (incl. incident
 │   │                                 #   export worker + PDF writer), styles, setup panel,
 │   │                                 #   entry point (app.py -> main)
 │   └── main.py                       # terminal entry point / sample loop
-├── tests/                            # 734 pytest tests (33 modules), fixed-device fixtures
+├── tests/                            # 806 pytest tests (40 modules), fixed-device fixtures
 ├── packaging/                        # build_windows.ps1, icon + version-resource assets,
 │   │                                 #   entry stubs (entry_gui.py / entry_console.py)
-├── docs/                             # engineering research (e.g. m14-network-research.md)
+├── docs/                             # ADRs (incident reporting, investigation core) +
+│                                     #   engineering research (m14-network-research.md)
 ├── android-task-manager-website/     # Next.js product website (static export -> out/)
 ├── .github/workflows/                # ci.yml · release.yml · deploy-pages.yml
 ├── pyproject.toml                    # single version authority (dynamic from __init__.py)
@@ -289,7 +292,7 @@ Before the dashboard appears, the **connection-setup screen** is shown whenever 
 python -m pytest
 ```
 
-The suite: **734 tests across 33 modules** (`tests/`), covering the parsers (CPU, memory, process, battery, network), delta calculations, collectors, the ADB discovery/connection layers, the package-identity resolver/service, the network investigation, the incident report layer (builder, JSON/HTML renderers, GUI panel/dialog/worker), and the GUI (widgets, setup flow, actions, workers).
+The suite: **806 tests across 40 modules** (`tests/`), covering the parsers (CPU, memory, process, battery, network), delta calculations, collectors, the ADB discovery/connection layers, the package-identity resolver/service, the network investigation, the incident report layer (builder, JSON/HTML renderers, GUI panel/dialog/worker), the investigation core (drift stability, timeline, attribution, why-flagged evidence, process tree), and the GUI (widgets, setup flow, actions, workers).
 
 - Runs entirely against **fixed fixtures based on verified Vivo V2026 output — no physical device required**.
 - **GUI tests run headlessly** via Qt's `offscreen` platform plugin (`QT_QPA_PLATFORM=offscreen`): they construct widgets, deliver snapshots, drive the monitor worker, and cover the first-run setup flow (each connection state, the multi-device picker, ADB discovery) without a display.

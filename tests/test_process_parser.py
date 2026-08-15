@@ -102,13 +102,20 @@ TOP_TEXT = TOP_SUMMARY + TOP_HEADER + "\n" + TOP_ROWS + "\n"
 # ps
 # ---------------------------------------------------------------------------
 
-PS_TEXT = """PID   UID  NAME
+PS_TEXT = """PID   PPID  UID  NAME
+1     0     0    init
+2     0     0    [kthreadd]
+3     2     0    [ksoftirqd/0]
+754   1     1000 system_server
+24791 754   10203 com.instagram.android
+24226 754   10205 com.whatsapp
+"""
+
+#: Legacy 3-column layout (PID UID NAME) — still accepted with ppid=None.
+PS_TEXT_3COL = """PID   UID  NAME
 1     0    init
 2     0    [kthreadd]
-3     2    [ksoftirqd/0]
 754   1000 system_server
-24791 10203 com.instagram.android
-24226 10205 com.whatsapp
 """
 
 
@@ -127,6 +134,22 @@ def test_ps_process_row_fields() -> None:
     assert by_pid[24791].name == "com.instagram.android"
 
 
+def test_ps_ppid_parsed() -> None:
+    identities = parse_ps_output(PS_TEXT)
+    by_pid = {i.pid: i for i in identities}
+    assert by_pid[754].ppid == 1
+    assert by_pid[24226].ppid == 754
+    assert by_pid[3].ppid == 2
+
+
+def test_ps_legacy_three_column_layout_ppid_none() -> None:
+    identities = parse_ps_output(PS_TEXT_3COL)
+    assert len(identities) == 3
+    assert all(i.ppid is None for i in identities)
+    assert identities[2].name == "system_server"
+    assert identities[2].uid == 1000
+
+
 def test_ps_pid_and_uid_are_ints() -> None:
     identities = parse_ps_output(PS_TEXT)
     assert all(isinstance(i.pid, int) for i in identities)
@@ -134,21 +157,22 @@ def test_ps_pid_and_uid_are_ints() -> None:
 
 
 def test_ps_names_with_spaces() -> None:
-    text = PS_TEXT + "12345 10299 my app name here\n"
+    text = PS_TEXT + "12345 754 10299 my app name here\n"
     identities = parse_ps_output(text)
     by_pid = {i.pid: i for i in identities}
     assert by_pid[12345].name == "my app name here"
+    assert by_pid[12345].ppid == 754
 
 
 def test_ps_names_with_unusual_characters() -> None:
-    text = PS_TEXT + "9001 10207 some.app[1]&^special\n"
+    text = PS_TEXT + "9001 754 10207 some.app[1]&^special\n"
     identities = parse_ps_output(text)
     by_pid = {i.pid: i for i in identities}
     assert by_pid[9001].name == "some.app[1]&^special"
 
 
 def test_ps_duplicate_pid_first_wins() -> None:
-    text = PS_TEXT + "24791 99999 duplicate.name\n"
+    text = PS_TEXT + "24791 754 99999 duplicate.name\n"
     identities = parse_ps_output(text)
     matches = [i for i in identities if i.pid == 24791]
     assert len(matches) == 1
@@ -156,7 +180,7 @@ def test_ps_duplicate_pid_first_wins() -> None:
 
 
 def test_ps_malformed_rows_skipped() -> None:
-    text = PS_TEXT + "abc def ghi\n" + "1 2\n" + "\nnot a row at all\n"
+    text = PS_TEXT + "abc def ghi jkl\n" + "1 2\n" + "\nnot a row at all\n"
     identities = parse_ps_output(text)
     assert len(identities) == 6  # malformed rows ignored, ps unchanged
 

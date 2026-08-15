@@ -15,14 +15,14 @@ from android_task_manager.terminal.renderer import _process_lines, _process_row
 # Fixtures (shared ps inventory + top table).
 # ---------------------------------------------------------------------------
 
-PS_TEXT = """PID   UID  NAME
-1     0    init
-2     0    [kthreadd]
-754   1000 system_server
-24199 1001 some.sys
-24791 10203 com.instagram.android
-24226 10205 com.whatsapp
-50001 10211 ps.only.process
+PS_TEXT = """PID   PPID  UID  NAME
+1     0     0    init
+2     0     0    [kthreadd]
+754   1     1000 system_server
+24199 754   1001 some.sys
+24791 754   10203 com.instagram.android
+24226 754   10205 com.whatsapp
+50001 1000 10211 ps.only.process
 """
 
 TOP_HEADER = "  PID  USER           PR  NI  VIRT     RES     SHR  S  %CPU   %MEM        TIME+           ARGS" + " " * 40
@@ -150,6 +150,7 @@ def test_duplicate_pid_handling_across_sources() -> None:
     assert merged.name == "system_server"
     assert merged.uid == 1000
     assert merged.cpu_percent == 1.2  # first top occurrence, not 77.7
+    assert merged.ppid == 1  # parent from the ps PPID column
 
 
 def test_classification_applied_by_collector() -> None:
@@ -166,7 +167,7 @@ def test_collector_uses_command_runner() -> None:
     runner = _FakeRunner()
     ProcessCollector(runner).sample()
     assert runner.calls[0][0] == "ps"
-    assert runner.calls[0][1:] == ["-A", "-o", "PID,UID,NAME"]
+    assert runner.calls[0][1:] == ["-A", "-o", "PID,PPID,UID,NAME"]
     assert runner.calls[1][0] == "top"
     assert runner.calls[1][1:] == ["-n", "1"]
 

@@ -9,9 +9,10 @@ Attribution model (evidence-based, never fabricated):
 * **Package** — UID → installed packages from ``pm list packages -U``
   (verified). Multiple packages may share one UID; all of them are kept.
 * **PID** — the kernel exposes no PID per socket, ``/proc/<pid>/fd`` is
-  permission-denied to adb-shell and netlink diag is blocked, so **PID is
-  deliberately absent from this model**; the UI states that attribution is
-  UID-level, never PID-level.
+  permission-denied to adb-shell and netlink diag is blocked, so on this
+  device stack PID stays ``None``; the model carries the field only so a
+  future source that *can* provide it is accepted without inventing one.
+  The UI states that attribution is UID-level, never PID-level.
 * **Interface** — no non-root source associates a socket with an interface;
   the model carries no interface field instead of a guessed one.
 
@@ -41,6 +42,9 @@ class SocketInfo:
     state: str | None = None
     uid: int | None = None
     inode: int | None = None
+    #: Owning PID when a source actually provided one; ``None`` on the
+    #: standard non-root stack (never derived or guessed).
+    pid: int | None = None
 
 
 @dataclass(frozen=True)
