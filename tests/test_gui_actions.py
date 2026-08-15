@@ -75,6 +75,53 @@ class _FakeRunner:
 # ---------------------------------------------------------------------------
 
 
+def _show_dashboard(window: MainWindow) -> None:
+    """Flip the stacked window onto the live dashboard (device connected)."""
+    from android_task_manager.gui.monitor import ConnectionState
+
+    window.show()
+    window.update_connection(ConnectionState.CONNECTED, "ok")
+    QApplication.processEvents()
+
+
+def test_actions_section_renders_inside_live_dashboard(qtapp) -> None:
+    # Regression: the actions row must be visible in the real window path
+    # (MainWindow -> ProcessWidget -> ProcessInspectorWidget) once the
+    # dashboard page is shown, not only on a standalone inspector widget.
+    window = MainWindow()
+    _show_dashboard(window)
+    window.processes.inspector.set_packages(PACKAGES)
+    window.processes.inspector.set_snapshot(app_snapshot())
+    QApplication.processEvents()
+    inspector = window.processes.inspector
+    assert inspector.isVisible()
+    assert inspector._actions_caption.isVisible()
+    assert inspector._open_btn.isVisible()
+    assert inspector._info_btn.isVisible()
+    assert inspector._stop_btn.isVisible()
+    assert inspector._open_btn.isEnabled()
+    assert inspector._stop_btn.isEnabled()
+
+
+def test_actions_section_visible_but_disabled_for_unverified(qtapp) -> None:
+    # The section must stay visible for kernel/system rows — never hidden.
+    window = MainWindow()
+    _show_dashboard(window)
+    window.processes.inspector.set_packages(PACKAGES)
+    window.processes.inspector.set_snapshot(system_snapshot())
+    QApplication.processEvents()
+    inspector = window.processes.inspector
+    assert inspector._actions_caption.isVisible()
+    assert inspector._open_btn.isVisible()
+    assert inspector._stop_btn.isVisible()
+    assert not inspector._open_btn.isEnabled()
+    assert not inspector._stop_btn.isEnabled()
+    assert (
+        inspector._actions_caption.text()
+        == "Application actions unavailable for this process."
+    )
+
+
 def test_actions_disabled_before_any_inspection(qtapp) -> None:
     widget = ProcessInspectorWidget()
     widget.set_packages(PACKAGES)
