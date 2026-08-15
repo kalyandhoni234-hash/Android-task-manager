@@ -62,6 +62,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Test release metadata
+        run: npm test
+
       - name: Lint
         run: npm run lint
 

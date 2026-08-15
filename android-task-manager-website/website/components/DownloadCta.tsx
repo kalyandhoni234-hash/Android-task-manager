@@ -1,8 +1,5 @@
-import {
-  GITHUB_RELEASES_URL,
-  HAS_RELEASE_ASSET,
-  RELEASE,
-} from "@/lib/constants";
+import { GITHUB_RELEASES_URL } from "@/lib/constants";
+import { fetchLatestRelease } from "@/lib/release";
 
 const PLATFORM_TOOLS_URL = "https://developer.android.com/tools/releases/platform-tools";
 
@@ -12,8 +9,31 @@ function formatSize(bytes: number): string {
   return `${mb.toFixed(1)} MB`;
 }
 
-export function DownloadCta() {
-  const size = formatSize(RELEASE.sizeBytes);
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+function formatReleaseDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  // UTC keeps the rendered date identical on every build machine.
+  return `${MONTHS[date.getUTCMonth()]} ${date.getUTCDate()}, ${date.getUTCFullYear()}`;
+}
+
+/**
+ * Download section. The release facts are fetched from the public GitHub
+ * API at build time (static export prerender) — the GitHub release is the
+ * source of truth, never a hardcoded version. When the fetch fails the
+ * section shows an honest "unavailable" state and links to the releases
+ * page instead of displaying stale data.
+ */
+export async function DownloadCta() {
+  const release = await fetchLatestRelease();
+  const size = release ? formatSize(release.sizeBytes) : "";
+  const releasedAt = release?.publishedAt
+    ? formatReleaseDate(release.publishedAt)
+    : "";
 
   return (
     <section id="download" className="bg-grid relative overflow-hidden">
@@ -28,10 +48,10 @@ export function DownloadCta() {
         </p>
 
         <div className="mt-9 flex flex-col items-stretch justify-center gap-3 sm:flex-row">
-          {HAS_RELEASE_ASSET ? (
+          {release ? (
             <a
-              href={RELEASE.url}
-              download={RELEASE.fileName}
+              href={release.url}
+              download={release.fileName}
               className="inline-flex items-center justify-center gap-2 rounded-md bg-accent px-6 py-3.5 text-base font-medium text-white transition-colors hover:bg-accent-strong"
             >
               Download for Windows
@@ -72,26 +92,34 @@ export function DownloadCta() {
         </div>
 
         <dl className="mx-auto mt-10 grid max-w-2xl gap-px overflow-hidden rounded-xl border border-border bg-border text-left sm:grid-cols-2">
-          <div className="bg-bg-raised p-5">
+          <div className="min-w-0 bg-bg-raised p-5">
             <dt className="font-mono text-[11px] uppercase tracking-[0.2em] text-text-tertiary">
               Release
             </dt>
-            <dd className="mt-1 text-sm text-text-primary">
-              v{RELEASE.version} · {RELEASE.fileName}
+            <dd className="mt-1 break-words text-sm text-text-primary">
+              {release
+                ? `v${release.version} · ${release.fileName}`
+                : "Release information temporarily unavailable."}
             </dd>
           </div>
-          <div className="bg-bg-raised p-5">
+          <div className="min-w-0 bg-bg-raised p-5">
             <dt className="font-mono text-[11px] uppercase tracking-[0.2em] text-text-tertiary">
               File size
             </dt>
-            <dd className="mt-1 text-sm text-text-primary">{size || "—"}</dd>
+            <dd className="mt-1 text-sm text-text-primary">{release ? size || "—" : "—"}</dd>
           </div>
-          <div className="col-span-full bg-bg-raised p-5">
+          <div className="min-w-0 bg-bg-raised p-5">
+            <dt className="font-mono text-[11px] uppercase tracking-[0.2em] text-text-tertiary">
+              Released
+            </dt>
+            <dd className="mt-1 text-sm text-text-primary">{releasedAt || "—"}</dd>
+          </div>
+          <div className="col-span-full min-w-0 bg-bg-raised p-5">
             <dt className="font-mono text-[11px] uppercase tracking-[0.2em] text-text-tertiary">
               SHA-256
             </dt>
             <dd className="font-mono mt-2 break-all text-xs leading-relaxed text-text-secondary">
-              {RELEASE.sha256 || "—"}
+              {release?.sha256 || "—"}
             </dd>
           </div>
         </dl>

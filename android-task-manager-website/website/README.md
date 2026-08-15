@@ -48,11 +48,17 @@ site; the README must remain in the repository.
 
 ## Release facts
 
-The download section's version / file size / SHA-256 come from
-`lib/constants.ts` and are filled in from the exact artifact of the current
-GitHub Release (built by `.github/workflows/release.yml`) — never from a
-local build. `TEST_COUNT` is updated from an actual
-`python -m pytest --collect-only -q` run.
+The download section's version / file size / SHA-256 are **not hardcoded**.
+At build time (static-export prerender) the site fetches the latest
+published release from the public GitHub API (`lib/release.ts` — no token,
+no backend) and renders its `AndroidTaskManager.exe` asset: the URL is
+built from the release tag, the file size comes from the release asset
+metadata, and the SHA-256 is parsed from the release's own
+`SHA256SUMS.txt`, matched by exact asset name (never the debug build, never
+a local build). If the fetch fails, the section shows an honest "Release
+information temporarily unavailable" state instead of stale data.
+`TEST_COUNT` is updated from an actual `python -m pytest --collect-only -q`
+run.
 
 Screenshots: real application screenshots are added as PNGs under
 `public/screenshots/` and passed as `src` props into `ScreenshotFrame`.
