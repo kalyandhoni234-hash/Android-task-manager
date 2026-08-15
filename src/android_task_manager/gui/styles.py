@@ -21,6 +21,11 @@ QFrame#sectionRule {
     background-color: #2a323c;
     border: none;
 }
+QWidget#updateBanner {
+    background-color: #1d232b;
+    border: 1px solid #2f6fed;
+    border-radius: 8px;
+}
 QLabel#sectionTitle {
     color: #7a8794;
     font-size: 12px;

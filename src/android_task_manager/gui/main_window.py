@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -33,8 +33,10 @@ from ..network.models import NetworkSnapshot
 from ..network_investigation.models import NetworkInvestigationSnapshot
 from ..process.inspector_models import ProcessInspectionSnapshot
 from ..process.models import ProcessSnapshot
+from ..updater import UpdateCheckResult
 from .monitor import ConnectionState, MonitorWorker
 from .setup_panel import INSTALL_ADB_STEPS, USB_DEBUGGING_STEPS, SetupPanel
+from .update_banner import UpdateBanner
 from .widgets.baseline_panel import BaselinePanel
 from .widgets.battery_widget import BatteryWidget
 from .widgets.cpu_widget import CPUWidget
@@ -79,6 +81,9 @@ class MainWindow(QMainWindow):
     #: (package) the user asked to audit a resolved package's permissions.
     permission_audit_requested = Signal(str)
 
+    #: The user's session started; the app runs the one-shot update check.
+    update_check_requested = Signal()
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"Android Task Manager {__version__}")
@@ -92,6 +97,7 @@ class MainWindow(QMainWindow):
         self.setup.install_help_requested.connect(self.show_install_help)
         self.setup.refresh_requested.connect(self.retry_requested.emit)
 
+        self.update_banner = UpdateBanner()
         self.device = DeviceWidget()
         self.cpu = CPUWidget()
         self.memory = MemoryWidget()
@@ -107,6 +113,10 @@ class MainWindow(QMainWindow):
         #: Most recent NetworkInvestigationSnapshot, kept so process
         #: inspections can render the UID-attributed socket view.
         self._latest_network_investigation: NetworkInvestigationSnapshot | None = None
+
+        #: The one-shot update check fires once, shortly after the window
+        #: is shown; the flag keeps it from ever firing twice in a session.
+        self._update_check_started = False
 
         #: Baseline & Security GUI-layer state (in-memory; persistence is
         #: still deferred): the saved baseline, the current snapshot and the
@@ -135,6 +145,7 @@ class MainWindow(QMainWindow):
         content = QVBoxLayout()
         content.setContentsMargins(14, 4, 14, 8)
         content.setSpacing(10)
+        content.addWidget(self.update_banner)
         content.addWidget(self.device)
         content.addLayout(top_row)
         content.addWidget(self.processes, 1)
@@ -371,6 +382,22 @@ class MainWindow(QMainWindow):
     def on_permission_audit_failed(self, package: str, message: str) -> None:
         self.processes.inspector.show_permission_audit_failed(package, message)
 
+    # ------------------------------------------------------------------
+    # Update check (one-shot, background worker, silent failures)
+    # ------------------------------------------------------------------
+
+    def on_update_check_completed(self, result: UpdateCheckResult) -> None:
+        """Render the typed check outcome; failures simply hide the banner."""
+        self.update_banner.show_result(result)
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt override
+        super().showEvent(event)
+        if not self._update_check_started:
+            self._update_check_started = True
+            # Give the dashboard a moment to settle, then run the one-shot
+            # check on the update worker's thread (never this one).
+            QTimer.singleShot(1500, self.update_check_requested.emit)
+
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
         self.closed.emit()
         super().closeEvent(event)
@@ -438,3 +465,15 @@ def wire_permissions(window: MainWindow, worker) -> None:
     window.permission_audit_requested.connect(worker.request_audit)
     worker.audit_ready.connect(window.on_permission_audit_ready)
     worker.audit_failed.connect(window.on_permission_audit_failed)
+
+
+def wire_updates(window: MainWindow, worker) -> None:
+    """Connect the UpdateWorker's signals to the window.
+
+    The request flows over a queued connection onto the worker's thread
+    (the GitHub API call never touches the GUI thread); the typed result
+    comes back the same way. Failures are silent — the banner simply
+    stays hidden.
+    """
+    window.update_check_requested.connect(worker.request_check)
+    worker.check_completed.connect(window.on_update_check_completed)

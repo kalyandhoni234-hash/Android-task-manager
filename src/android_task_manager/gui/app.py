@@ -17,6 +17,7 @@ from typing import Sequence
 
 from ..adb.connection import ConnectionManager
 from ..adb.discovery import find_adb, is_usable_adb, version_validator
+from .. import __version__
 
 _DEFAULT_INTERVAL = 2.0
 _DEFAULT_MEMORY_INTERVAL = 10.0
@@ -99,6 +100,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .baseline_worker import BaselineWorker
         from .inspector_worker import ProcessInspectionWorker
         from .permission_worker import PermissionWorker
+        from .update_worker import UpdateWorker
 
         from .main_window import (
             MainWindow,
@@ -107,6 +109,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             wire_inspector,
             wire_permissions,
             wire_security,
+            wire_updates,
         )
         from .monitor import MonitorWorker
         from .styles import DARK_STYLE
@@ -150,11 +153,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     actions = ActionWorker(connection=connection, timeout=args.timeout)
     baseline_worker = BaselineWorker(connection=connection, timeout=args.timeout)
     permission_worker = PermissionWorker(connection=connection, timeout=args.timeout)
+    update_worker = UpdateWorker(current_version=__version__)
     wire(window, worker)
     wire_inspector(window, inspector)
     wire_actions(window, worker, actions)
     wire_security(window, baseline_worker)
     wire_permissions(window, permission_worker)
+    wire_updates(window, update_worker)
 
     # First-run setup flow: the window asks; the shared connection + worker
     # react. Retry/relocate/device-pick are delivered onto the worker thread.
@@ -204,6 +209,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     permission_thread = QThread()
     permission_worker.moveToThread(permission_thread)
 
+    update_thread = QThread()
+    update_worker.moveToThread(update_thread)
+
     def shutdown() -> None:
         worker.stop()
         thread.quit()
@@ -216,6 +224,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         baseline_thread.wait(3000)
         permission_thread.quit()
         permission_thread.wait(3000)
+        update_thread.quit()
+        update_thread.wait(3000)
 
     app.aboutToQuit.connect(shutdown)
 
@@ -224,6 +234,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     actions_thread.start()
     baseline_thread.start()
     permission_thread.start()
+    update_thread.start()
     window.show()
     return app.exec()
 
