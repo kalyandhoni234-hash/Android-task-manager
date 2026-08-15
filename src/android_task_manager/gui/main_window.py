@@ -31,6 +31,7 @@ from ..baseline.models import (
 )
 from ..battery.models import BatterySnapshot
 from ..cpu.models import CPUSnapshot
+from ..device.models import DeviceInformation
 from ..heuristics import HeuristicReport
 from ..incident.builder import build_incident_report
 from ..incident.models import SOURCE_GUI, IncidentReport
@@ -48,11 +49,16 @@ from ..permissions.models import PackagePermissionAudit
 from ..process.inspector_models import ProcessInspectionSnapshot
 from ..process.models import ProcessSnapshot
 from ..updater import UpdateCheckResult
+from .connection_strip import ConnectionStrip
+from .device_page import DevicePage
+from .findings_page import FindingsPage
 from .incident_dialog import IncidentDialog
 from .investigation_dialog import InvestigationDialog
 from .monitor import ConnectionState, MonitorWorker
+from .overview_page import OverviewPage, OverviewState
 from .process_tree_dialog import ProcessTreeDialog
 from .setup_panel import INSTALL_ADB_STEPS, USB_DEBUGGING_STEPS, SetupPanel
+from .sidebar import DEFAULT_PAGE, Sidebar
 from .update_banner import UpdateBanner
 from .why_flagged_dialog import WhyFlaggedDialog
 from .widgets.baseline_panel import BaselinePanel
@@ -63,6 +69,11 @@ from .widgets.incident_panel import IncidentPanel
 from .widgets.memory_widget import MemoryWidget
 from .widgets.network_widget import NetworkWidget
 from .widgets.process_widget import ProcessWidget
+
+
+def _fmt_when(value) -> str:
+    """Local-time, second-resolution timestamp for overview facts."""
+    return value.astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
 class MainWindow(QMainWindow):
@@ -133,6 +144,12 @@ class MainWindow(QMainWindow):
         #: associated with the matching ProcessInfo (cpu/memory percent).
         self._latest_processes: ProcessSnapshot | None = None
 
+        #: Most recent live snapshots, kept so the Device page can mirror a
+        #: compact status summary without any additional ADB traffic.
+        self._latest_cpu: CPUSnapshot | None = None
+        self._latest_memory: MemorySnapshot | None = None
+        self._latest_battery: BatterySnapshot | None = None
+
         #: Most recent NetworkInvestigationSnapshot, kept so process
         #: inspections can render the UID-attributed socket view.
         self._latest_network_investigation: NetworkInvestigationSnapshot | None = None
@@ -158,6 +175,10 @@ class MainWindow(QMainWindow):
         self._device_label: str | None = None
         self._android_version: str | None = None
 
+        #: Structured identity snapshot of the connected device (collected
+        #: once per connection session); None when nothing is connected.
+        self.device_information: DeviceInformation | None = None
+
         #: Investigation-core GUI-layer state: the observation window fed
         #: by the monitor (deduped, bounded), the stability reports of the
         #: last drift check, and the lazily created investigation dialogs.
@@ -182,38 +203,150 @@ class MainWindow(QMainWindow):
         self.incident.view_requested.connect(self._on_incident_view_requested)
         self.incident.export_requested.connect(self._on_incident_export_requested)
 
-        top_row = QHBoxLayout()
-        top_row.addWidget(self.cpu, 1)
-        top_row.addWidget(self.memory, 1)
+        # -- Application shell: sidebar + pages ------------------------------
+        self.sidebar = Sidebar()
+        self.sidebar.page_requested.connect(self._on_page_requested)
+        self.connection_strip = ConnectionStrip()
 
-        bottom_row = QHBoxLayout()
-        bottom_row.addWidget(self.battery, 1)
-        bottom_row.addWidget(self.network, 1)
+        self.overview = OverviewPage()
+        self.findings = FindingsPage(self.incident)
+        self.findings.why_requested.connect(self._on_why_requested)
+        self.device_page = DevicePage(self.device)
 
-        content = QVBoxLayout()
-        content.setContentsMargins(14, 4, 14, 8)
-        content.setSpacing(10)
-        content.addWidget(self.update_banner)
-        content.addWidget(self.device)
-        content.addLayout(top_row)
-        content.addWidget(self.processes, 1)
-        content.addWidget(self.security)
-        content.addWidget(self.incident)
-        content.addLayout(bottom_row)
+        self._pages = QStackedWidget()
+        self._pages.setObjectName("pages")
+        self._pages.addWidget(self.overview)  # 0: OVERVIEW
+        self._pages.addWidget(self._scrolled(self.processes))  # 1: PROCESSES
+        self._pages.addWidget(self._scrolled(self.network))  # 2: NETWORK
+        self._pages.addWidget(self._scrolled(self.security))  # 3: BASELINE
+        self._pages.addWidget(self._scrolled(self.findings))  # 4: FINDINGS
+        self._pages.addWidget(self._scrolled(self.device_page))  # 5: DEVICE
+        self._pages.addWidget(self._scrolled(self._health_page()))  # 6: HEALTH
 
-        container = QWidget()
-        container.setObjectName("dashboard")
-        container.setLayout(content)
+        self.sidebar.set_active(DEFAULT_PAGE)
+        self._pages.setCurrentIndex(0)
+        self._connection_state: ConnectionState | None = None
+        self._refresh_overview()
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setWidget(container)
+        right_column = QVBoxLayout()
+        right_column.setContentsMargins(0, 0, 0, 0)
+        right_column.setSpacing(0)
+        right_column.addWidget(self.update_banner)
+        right_column.addWidget(self.connection_strip)
+        right_column.addWidget(self._pages, 1)
+
+        shell = QWidget()
+        shell.setObjectName("shell")
+        shell_layout = QHBoxLayout(shell)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(0)
+        shell_layout.addWidget(self.sidebar)
+        shell_layout.addLayout(right_column, 1)
 
         self._stack = QStackedWidget()
         self._stack.addWidget(self.setup)
-        self._stack.addWidget(scroll)
+        self._stack.addWidget(shell)
         self.setCentralWidget(self._stack)
+        self._refresh_device_page()
+
+    @staticmethod
+    def _scrolled(widget: QWidget) -> QScrollArea:
+        """Wrap one page in a shared scroll area (frame-less, resizable)."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(widget)
+        return scroll
+
+    def _health_page(self) -> QWidget:
+        """The HEALTH page: the existing CPU / memory / battery widgets."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+        layout.addWidget(self.cpu, 1)
+        layout.addWidget(self.memory, 1)
+        layout.addWidget(self.battery, 1)
+        return page
+
+    def _on_page_requested(self, key: str) -> None:
+        """Switch to a page by its sidebar key; the pages stack order is
+        fixed and created once, so navigation never rebuilds anything."""
+        order = {
+            "overview": 0,
+            "processes": 1,
+            "network": 2,
+            "baseline": 3,
+            "findings": 4,
+            "device": 5,
+            "health": 6,
+        }
+        index = order.get(key)
+        if index is None:
+            return
+        self.sidebar.set_active(key)
+        self._pages.setCurrentIndex(index)
+
+    # ------------------------------------------------------------------
+    # Overview / findings refresh (presentation only)
+    # ------------------------------------------------------------------
+
+    def _refresh_overview(self) -> None:
+        """Summarize the existing GUI-layer state into the Overview page."""
+        heuristics = self._heuristics
+        high = sum(1 for s in heuristics.signals if s.severity == "HIGH") if heuristics else None
+        medium = (
+            sum(1 for s in heuristics.signals if s.severity == "MEDIUM")
+            if heuristics
+            else None
+        )
+        self.overview.refresh(
+            OverviewState(
+                device_label=self._device_label,
+                android_version=self._android_version,
+                connection=self._connection_state,
+                process_count=(
+                    len(self._latest_processes.processes)
+                    if self._latest_processes is not None
+                    else None
+                ),
+                socket_count=(
+                    len(self._latest_network_investigation.sockets)
+                    if self._latest_network_investigation is not None
+                    else None
+                ),
+                drift_count=(
+                    len(self._drift_report.events) if self._drift_report is not None else None
+                ),
+                high_findings=high,
+                medium_findings=medium,
+                baseline_at=_fmt_when(self._baseline.created_at) if self._baseline else None,
+                drift_checked_at=(
+                    _fmt_when(self._drift_report.compared_at)
+                    if self._drift_report is not None
+                    else None
+                ),
+                audits_run=len(self._permission_audits),
+                rules_checked=(
+                    len(heuristics.rules_applied) if heuristics is not None else None
+                ),
+                signals_seen=len(heuristics.signals) if heuristics is not None else None,
+            )
+        )
+
+    def _refresh_findings(self) -> None:
+        """Re-render the Findings page from the last heuristic report."""
+        self.findings.show_heuristics(self._heuristics)
+
+    def _refresh_device_page(self) -> None:
+        """Mirror the structured identity + live snapshots onto the page."""
+        self.device_page.refresh(
+            self.device_information,
+            self._latest_battery,
+            self._latest_memory,
+            self._latest_cpu,
+            self._connection_state,
+        )
 
     # ------------------------------------------------------------------
     # Monitor signal handlers (GUI thread)
@@ -227,8 +360,10 @@ class MainWindow(QMainWindow):
         battery: BatterySnapshot | None,
         network: NetworkSnapshot | None,
     ) -> None:
+        self._latest_cpu = cpu
         self.cpu.set_snapshot(cpu)
         if memory is not None:
+            self._latest_memory = memory
             self.memory.set_snapshot(memory)
         if processes is not None:
             self._latest_processes = processes
@@ -238,14 +373,25 @@ class MainWindow(QMainWindow):
             # timestamp, which the tracker dedupes).
             self._observation_tracker.record_process_snapshot(processes)
         if battery is not None:
+            self._latest_battery = battery
             self.battery.set_snapshot(battery)
         if network is not None:
             self.network.set_snapshot(network)
+        self._refresh_overview()
+        self._refresh_device_page()
 
     def update_device(self, label: str, android_version: str) -> None:
         self._device_label = label
         self._android_version = android_version
         self.device.set_info(label, android_version)
+        self.connection_strip.set_device(label, android_version)
+        self._refresh_overview()
+        self._refresh_device_page()
+
+    def update_device_information(self, info: DeviceInformation) -> None:
+        """Adopt the structured identity snapshot of the connected device."""
+        self.device_information = info
+        self._refresh_device_page()
 
     def update_network_investigation(
         self, snapshot: NetworkInvestigationSnapshot
@@ -254,18 +400,25 @@ class MainWindow(QMainWindow):
         self._latest_network_investigation = snapshot
         self.processes.inspector.set_network_data(snapshot)
         self._observation_tracker.record_network_snapshot(snapshot)
+        self._refresh_overview()
 
     def update_devices(self, devices: list[dict[str, str]]) -> None:
         """Fill the multi-device picker on the setup screen."""
         self.setup.set_devices(devices)
 
     def update_connection(self, state: ConnectionState, detail: str) -> None:
+        self._connection_state = state
         self.device.set_status(state, detail)
+        self.connection_strip.set_state(state, detail)
         if state is ConnectionState.CONNECTED:
             self._stack.setCurrentIndex(1)
         else:
+            # No device: stale identity facts must never linger on the page.
+            self.device_information = None
             self._stack.setCurrentIndex(0)
             self.setup.show_state(state, detail)
+        self._refresh_overview()
+        self._refresh_device_page()
 
     def show_usb_help(self) -> None:
         QMessageBox.information(self, "Enable USB debugging", USB_DEBUGGING_STEPS)
@@ -362,6 +515,7 @@ class MainWindow(QMainWindow):
         self.processes.set_new_process_refs(frozenset())
         self.processes.inspector.set_new_socket_identities(frozenset())
         self._reset_incident_state()
+        self._refresh_overview()
 
     def _reset_incident_state(self) -> None:
         """A fresh baseline invalidates every incident artifact honestly:
@@ -372,6 +526,7 @@ class MainWindow(QMainWindow):
         self._incident_report = None
         self.incident.set_report(None)
         self.incident.set_generation_available(False)
+        self._refresh_findings()
 
     def on_baseline_failed(self, message: str) -> None:
         self.security.show_save_failed(message)
@@ -389,6 +544,8 @@ class MainWindow(QMainWindow):
         self._heuristics = heuristics
         self.security.show_drift(report, heuristics)
         self.incident.set_generation_available(True)
+        self._refresh_findings()
+        self._refresh_overview()
         if self._baseline is None:
             return
         self._record_check_observations(current)
@@ -485,6 +642,7 @@ class MainWindow(QMainWindow):
         self._permission_audits.append(audit)
         if len(self._permission_audits) > 20:
             del self._permission_audits[:-20]
+        self._refresh_overview()
 
     def on_permission_audit_failed(self, package: str, message: str) -> None:
         self.processes.inspector.show_permission_audit_failed(package, message)
@@ -721,9 +879,13 @@ def wire(window: MainWindow, worker: MonitorWorker) -> None:
     worker.snapshots.connect(window.update_snapshots)
     worker.network_investigation.connect(window.update_network_investigation)
     worker.device_info.connect(window.update_device)
+    worker.device_information.connect(window.update_device_information)
     worker.connection_changed.connect(window.update_connection)
     worker.devices_available.connect(window.update_devices)
     window.closed.connect(worker.stop)
+    window.overview.baseline_requested.connect(
+        lambda: window._on_page_requested("baseline")
+    )
 
 
 def wire_inspector(window: MainWindow, inspector) -> None:

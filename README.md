@@ -15,7 +15,7 @@
 
 **Get it — no Python required:**
 
-[![Download for Windows](https://img.shields.io/badge/Download-AndroidTaskManager.exe-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/download/v0.2.0/AndroidTaskManager.exe)
+[![Download for Windows](https://img.shields.io/badge/Download-AndroidTaskManager.exe-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/download/v0.4.0/AndroidTaskManager.exe)
 [![Product website](https://img.shields.io/badge/Product-Website-white?style=for-the-badge&logo=github&logoColor=white)](https://kalyandhoni234-hash.github.io/Android-task-manager/)
 [![Releases](https://img.shields.io/badge/GitHub-Releases-white?style=for-the-badge&logo=github&logoColor=white)](https://github.com/kalyandhoni234-hash/Android-task-manager/releases)
 
@@ -149,7 +149,7 @@ The key architectural rule: **collectors never invoke `subprocess` directly.** A
 | Device bridge | ADB (`adb shell`) | not bundled (see [Why is ADB not bundled?](#why-is-adb-not-bundled)) |
 | Term renderer | custom, dependency-light | `terminal/renderer.py` |
 | Windows packaging | PyInstaller ≥ 6 | one-file windowed + debug builds |
-| Tests | pytest ≥ 7 | 806 tests, fixture-driven, GUI headless |
+| Tests | pytest ≥ 7 | 893 tests, fixture-driven, GUI headless |
 | CI/CD | GitHub Actions | Linux matrix (3.10–3.12) + Windows release build |
 | Product site | Next.js 16 (static export) | hosted on GitHub Pages |
 
@@ -168,17 +168,20 @@ android-task-manager/
 │   ├── process/                      # ps identity + top metrics, classification, and the
 │   │                                 #   read-only /proc/<pid> inspector (inspector_* modules)
 │   ├── network_investigation/        # socket tables (tcp{,6},udp{,6}) + UID attribution
+│   ├── device/                       # device identity: structured getprop/wm/df model,
+│   │                                 #   parser, collector (collected once per session)
 │   ├── incident/                     # incident report: models (schema) · builder
 │   │                                 #   (deterministic aggregation) · renderers (JSON/HTML)
 │   ├── investigation/                # investigation core: drift stability · timeline ·
 │   │                                 #   attribution · why-flagged evidence · process tree
 │   ├── action/                       # package verification + Open App / App Info / Force Stop
 │   ├── terminal/                     # dependency-light text renderer
-│   ├── gui/                          # PySide6 dashboard: widgets/, workers (incl. incident
-│   │                                 #   export worker + PDF writer), styles, setup panel,
-│   │                                 #   entry point (app.py -> main)
+│   ├── gui/                          # PySide6 dashboard: sidebar navigation, overview,
+│   │                                 #   device-info & findings pages, widgets/, workers
+│   │                                 #   (incl. incident export worker + PDF writer),
+│   │                                 #   styles, setup panel, entry point (app.py -> main)
 │   └── main.py                       # terminal entry point / sample loop
-├── tests/                            # 806 pytest tests (40 modules), fixed-device fixtures
+├── tests/                            # 893 pytest tests (44 modules), fixed-device fixtures
 ├── packaging/                        # build_windows.ps1, icon + version-resource assets,
 │   │                                 #   entry stubs (entry_gui.py / entry_console.py)
 ├── docs/                             # ADRs (incident reporting, investigation core) +
@@ -192,7 +195,7 @@ android-task-manager/
 
 ## 🚀 Download & Run (end users — no Python needed)
 
-1. Download **`AndroidTaskManager.exe`** (a self-contained PySide6 build) from the [latest release](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/download/v0.2.0/AndroidTaskManager.exe) — or from the [product website](https://kalyandhoni234-hash.github.io/Android-task-manager/), which links directly to the exact published artifact and shows its SHA-256 checksum.
+1. Download **`AndroidTaskManager.exe`** (a self-contained PySide6 build) from the [latest release](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/download/v0.4.0/AndroidTaskManager.exe) — or from the [product website](https://kalyandhoni234-hash.github.io/Android-task-manager/), which links directly to the exact published artifact and shows its SHA-256 checksum.
 2. Double-click the EXE. You do **not** need Python, git or the source tree.
 3. The **connection-setup screen** walks you through the only remaining requirement — ADB + a connected device (details in the GUI section below).
 4. The live dashboard appears. Monitoring is read-only; the three device actions are explicit and require a selection.
@@ -273,18 +276,29 @@ Notes: `--interval` is the tick rate; the other intervals are typically slower b
 
 The GUI accepts the same `--adb`, `--device`, `--interval`, `--process-interval`, `--battery-interval`, `--memory-interval`, `--network-interval`, `--network-investigation-interval` and `--timeout` flags; it has no `--samples` flag.
 
-### GUI layout (top to bottom)
+### GUI layout
 
-- **Device** — manufacturer/model label, Android version, live connection state (connected / no device / ADB not found / offline / multiple devices / not authorized / timed out).
-- **CPU** — overall utilization, the recent-history graph, one bar per core with frequency.
-- **Memory** — available memory as the headline figure, a used-share bar, Total / Free / Cached / Buffers breakdown, history graph.
-- **Processes** — table (PID, CPU, MEM, STATE, NAME) sorted by CPU, with filtering/sorting, classification, and the selectable **Process Inspector** panel (details + Network Connections).
-- **Baseline & Security** — baseline capture, drift check with suspicious-signal section, and session export (JSON/CSV).
-- **Incident Reporting** — generate, view (dialog with HTML preview) and export (JSON/HTML/PDF) the investigation report.
-- **Battery** — level, status, health, temperature/voltage/technology/power source, history graph.
+The dashboard is organized by a persistent **sidebar** with seven pages, plus a top strip showing the update banner and the live ADB connection state:
+
+- **Overview** — device summary, metric cards (processes, network, drift, HIGH/MEDIUM findings), security status and recent activity.
+- **Processes** — table (PID, CPU, MEM, STATE, NAME) sorted by CPU, with filtering/sorting, classification, and the selectable **Process Inspector** panel (details + Network Connections + permission audit).
 - **Network** — download/upload throughput, interface list grouped by type (active by default), history graph.
+- **Baseline** — baseline capture, drift check with suspicious-signal section, investigation timeline/process-tree/why-flagged actions, and session export (JSON/CSV).
+- **Findings** — suspicious signals severity-first (HIGH → MEDIUM), each with a *Why?* evidence button, plus incident report generation (view + export JSON/HTML/PDF).
+- **Device** — an "About phone" style information dashboard: device summary, basic information (manufacturer/brand/model/device/product/board/hardware/SoC), Android/software (version, API level, security patch, build ID/number, kernel, bootloader, baseband), CPU/hardware (processor, architecture, cores, max frequency), memory, battery, storage (internal `/data` volume with usage bar), display (resolution, density, refresh rate, orientation) and identifiers (Android ID, Wi-Fi/Bluetooth MAC). Static facts are collected **once per connection session** from `getprop`/`wm`/`df`/`dumpsys`; battery/memory/CPU reuse the existing collectors' snapshots — the Device page never runs its own polling.
+- **Health** — CPU (utilization + per-core bars + history), memory (available + breakdown + history), battery (level + history).
+
+Missing values render as **N/A — unavailable on this device**; nothing is guessed or inferred. Long values (e.g. build fingerprint) are shortened on screen with the full value in the tooltip. When the device disconnects the Device page empties to a "NO DEVICE CONNECTED" state — no stale values survive a device switch.
 
 Before the dashboard appears, the **connection-setup screen** is shown whenever the app cannot reach exactly one device; it explains what is missing and how to fix it, auto-retries, and has a *Retry* button.
+
+### Device information sources and limits
+
+Device facts come from standard Android system properties and read-only commands (`getprop`, `wm size`/`wm density`, `df -k /data`, `dumpsys display`/`dumpsys input`, `uname -r`, `/proc/cpuinfo`, cpufreq sysfs nodes, `settings get secure android_id`, `/sys/class/net/wlan0/address`). Availability varies by device, Android version, OEM restrictions, and ADB permissions, so every field is optional:
+
+- **Identifiers are intentionally limited**: Android ID and MAC addresses are shown only when the device actually exposes them; `02:00:00:00:00:00` (the Android privacy placeholder) and restricted `settings` reads render as N/A. IMEI/SIM serials are never requested — they need privileged access the app does not use.
+- **Storage** reports the internal shared volume (`/data`, or its `/data/user/0` per-user view on file-based-encryption devices) only; other volumes are never silently combined into it.
+- **Static facts are cached for the connection session** (collected once, on connect); live battery/memory/CPU reuse the existing monitoring snapshots — the Device page adds no polling of its own.
 
 ## 🧪 Testing
 
@@ -292,7 +306,7 @@ Before the dashboard appears, the **connection-setup screen** is shown whenever 
 python -m pytest
 ```
 
-The suite: **806 tests across 40 modules** (`tests/`), covering the parsers (CPU, memory, process, battery, network), delta calculations, collectors, the ADB discovery/connection layers, the package-identity resolver/service, the network investigation, the incident report layer (builder, JSON/HTML renderers, GUI panel/dialog/worker), the investigation core (drift stability, timeline, attribution, why-flagged evidence, process tree), and the GUI (widgets, setup flow, actions, workers).
+The suite: **897 tests across 44 modules** (`tests/`), covering the parsers (CPU, memory, process, battery, network), delta calculations, collectors, the ADB discovery/connection layers, the package-identity resolver/service, the network investigation, the incident report layer (builder, JSON/HTML renderers, GUI panel/dialog/worker), the investigation core (drift stability, timeline, attribution, why-flagged evidence, process tree), device information (getprop/wm/df parsing, collector, Device page), the GUI (widgets, sidebar navigation, overview/findings/device pages, setup flow, actions, workers).
 
 - Runs entirely against **fixed fixtures based on verified Vivo V2026 output — no physical device required**.
 - **GUI tests run headlessly** via Qt's `offscreen` platform plugin (`QT_QPA_PLATFORM=offscreen`): they construct widgets, deliver snapshots, drive the monitor worker, and cover the first-run setup flow (each connection state, the multi-device picker, ADB discovery) without a display.
@@ -329,7 +343,9 @@ Both builds embed the product icon (`packaging/assets/atm.ico`) and a Windows ve
 
 | Release | Assets |
 | --- | --- |
-| [v0.2.0](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/tag/v0.2.0) *(current)* | [`AndroidTaskManager.exe`](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/download/v0.2.0/AndroidTaskManager.exe) — 49,086,120 bytes, SHA-256 `a46c3ac3fd99f04182515f00fbaed9600ee4c0f7dd23c2d9009d509d92293086` · `AndroidTaskManager-debug.exe` · `SHA256SUMS.txt` |
+| [v0.4.0](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/tag/v0.4.0) *(current)* | [`AndroidTaskManager.exe`](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/download/v0.4.0/AndroidTaskManager.exe) — 48,581,300 bytes, SHA-256 `193b97291bb69791c67e3217ae412b37941b7a78e3438746789b73dd619207be` · `AndroidTaskManager-debug.exe` · `SHA256SUMS.txt` |
+| [v0.3.0](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/tag/v0.3.0) | earlier build |
+| [v0.2.0](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/tag/v0.2.0) | earlier build |
 | [v0.1.0](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/tag/v0.1.0) | earlier build |
 
 Every release publishes its executables **together with `SHA256SUMS.txt`**, and the product website shows the checksum of the exact published EXE — so you can verify what you downloaded. Release pages: <https://github.com/kalyandhoni234-hash/Android-task-manager/releases>

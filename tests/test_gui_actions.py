@@ -76,11 +76,13 @@ class _FakeRunner:
 
 
 def _show_dashboard(window: MainWindow) -> None:
-    """Flip the stacked window onto the live dashboard (device connected)."""
+    """Flip the stacked window onto the live dashboard (device connected)
+    and open the PROCESSES page, where the inspector panel lives."""
     from android_task_manager.gui.monitor import ConnectionState
 
     window.show()
     window.update_connection(ConnectionState.CONNECTED, "ok")
+    window.sidebar.button("processes").click()
     QApplication.processEvents()
 
 

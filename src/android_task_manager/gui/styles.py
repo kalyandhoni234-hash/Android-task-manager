@@ -2,6 +2,23 @@
 
 from __future__ import annotations
 
+from PySide6.QtWidgets import QApplication, QWidget
+
+
+def repolish(widget: QWidget) -> None:
+    """Re-apply the app stylesheet to *widget* after an objectName change.
+
+    Qt only evaluates an objectName-based stylesheet rule when a widget is
+    polished; changing ``objectName`` at runtime without re-polishing leaves
+    the old color/weight in place. Widgets that swap objectNames to reflect
+    state (connection, severity) must call this after every swap.
+    """
+    app = QApplication.instance()
+    if app is not None:
+        app.style().unpolish(widget)
+        app.style().polish(widget)
+
+
 DARK_STYLE = """
 QWidget {
     background-color: #14181d;
@@ -196,5 +213,147 @@ QScrollBar::handle:vertical {
 }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0;
+}
+QWidget#sidebar {
+    background-color: #10141a;
+    border-right: 1px solid #2a323c;
+}
+QLabel#appTitle {
+    color: #d8dee6;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 0 8px;
+}
+QLabel#navSection {
+    color: #5c6672;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    padding: 4px 8px 1px 8px;
+}
+QPushButton#navButton {
+    background: transparent;
+    color: #aab4c0;
+    border: none;
+    border-left: 2px solid transparent;
+    border-radius: 0;
+    text-align: left;
+    padding: 7px 10px 7px 10px;
+    font-weight: 500;
+}
+QPushButton#navButton:hover {
+    background-color: #1d232b;
+    color: #d8dee6;
+}
+QPushButton#navButton:focus {
+    background-color: #1d232b;
+    color: #d8dee6;
+}
+QPushButton#navButton:checked {
+    background-color: #1b2430;
+    color: #e8eef5;
+    border-left: 2px solid #2f6fed;
+    font-weight: 600;
+}
+QWidget#connectionStrip {
+    background-color: #10141a;
+    border-bottom: 1px solid #2a323c;
+}
+QLabel#pageTitle {
+    font-size: 22px;
+    font-weight: 600;
+    color: #e8eef5;
+}
+QLabel#pageSubtitle {
+    color: #7a8794;
+    font-size: 12px;
+}
+QWidget#metricCard {
+    background-color: #1d232b;
+    border: 1px solid #2a323c;
+    border-radius: 8px;
+}
+QLabel#cardCaption {
+    color: #7a8794;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
+QLabel#cardValue {
+    color: #e8eef5;
+    font-size: 30px;
+    font-weight: 600;
+}
+QLabel#cardValueHigh {
+    color: #ff5f56;
+    font-size: 30px;
+    font-weight: 600;
+}
+QLabel#cardValueMedium {
+    color: #f5a524;
+    font-size: 30px;
+    font-weight: 600;
+}
+QLabel#securityStatus {
+    color: #aab4c0;
+}
+QLabel#securityStatusHigh {
+    color: #ff5f56;
+    font-weight: 600;
+}
+QLabel#securityStatusMedium {
+    color: #f5a524;
+    font-weight: 600;
+}
+QLabel#emptyTitle {
+    color: #aab4c0;
+    font-size: 15px;
+    font-weight: 600;
+}
+QLabel#emptyBody {
+    color: #7a8794;
+    font-size: 12px;
+}
+QLabel#deviceEmptyTitle {
+    color: #7a8794;
+    font-size: 16px;
+    font-weight: 600;
+    padding: 32px 16px;
+}
+QWidget#findingCard {
+    background-color: #1d232b;
+    border: 1px solid #2a323c;
+    border-left: 3px solid #f5a524;
+    border-radius: 8px;
+}
+QWidget#findingCardHigh {
+    background-color: #1d232b;
+    border: 1px solid #4a2f33;
+    border-left: 3px solid #ff5f56;
+    border-radius: 8px;
+}
+QLabel#findingSeverity {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background-color: #232b35;
+}
+QLabel#findingSeverity[level="high"] {
+    color: #ff5f56;
+}
+QLabel#findingSeverity[level="elevated"] {
+    color: #f5a524;
+}
+QLabel#findingRule {
+    color: #d8dee6;
+    font-weight: 600;
+    font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+    font-size: 12px;
+}
+QLabel#findingReason {
+    color: #aab4c0;
 }
 """

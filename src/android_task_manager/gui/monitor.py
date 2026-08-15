@@ -29,6 +29,7 @@ from ..adb.exceptions import (
 )
 from ..battery.collector import BatteryCollector
 from ..cpu.collector import CPUCollector
+from ..device.collector import DeviceInfoCollector
 from ..memory.collector import MemoryCollector
 from ..network.collector import NetworkCollector
 from ..network_investigation.collector import NetworkInvestigationCollector
@@ -70,6 +71,9 @@ class MonitorWorker(QObject):
     network_investigation = Signal(object)
     #: (device_label, android_version)
     device_info = Signal(str, str)
+    #: (DeviceInformation) — the structured identity snapshot, emitted once
+    #: per successful connection (static facts are cached for the session).
+    device_information = Signal(object)
     #: (ConnectionState, error_detail)
     connection_changed = Signal(object, str)
     #: (list[dict]) — attached devices for the multi-device selection UI. Each
@@ -105,6 +109,7 @@ class MonitorWorker(QObject):
         self._battery_collector = BatteryCollector(self._connection)
         self._network_collector = NetworkCollector(self._connection)
         self._network_investigation_collector = NetworkInvestigationCollector(self._connection)
+        self._device_info_collector = DeviceInfoCollector(self._connection)
 
         self._cpu_interval = cpu_interval
         self._memory_interval = memory_interval
@@ -163,6 +168,11 @@ class MonitorWorker(QObject):
             release = self._connection.shell(["getprop", "ro.build.version.release"]).strip()
             label = f"{manufacturer} {model}".strip() or serial
             self.device_info.emit(label, release or "Unknown")
+            # One structured identity snapshot per connection session; the
+            # collector tolerates per-property failures, so a single blocked
+            # property never fails the connect. A total command failure maps
+            # through the same typed ADB errors as the rest of the pipeline.
+            self.device_information.emit(self._device_info_collector.sample())
             self._connected = True
             self.connection_changed.emit(ConnectionState.CONNECTED, "")
         except ADBNotFoundError as exc:
