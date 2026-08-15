@@ -39,6 +39,13 @@ SITE_URL in `lib/constants.ts` points at the Pages URL and can be overridden
 with the `SITE_URL` build-time environment variable when a custom domain is
 added.
 
+### Repository settings requirement
+
+The repository's Pages publishing source MUST be **GitHub Actions**
+(Settings → Pages → Build and deployment → Source). A "Deploy from a branch"
+source serving the repository root would render the README instead of this
+site; the README must remain in the repository.
+
 ## Release facts
 
 The download section's version / file size / SHA-256 come from
