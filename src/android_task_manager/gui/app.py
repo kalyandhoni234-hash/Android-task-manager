@@ -19,6 +19,7 @@ from typing import Sequence
 from .. import __version__
 from ..adb.connection import ConnectionManager
 from ..adb.discovery import find_adb, version_validator
+from ..baseline.storage import BaselineStore, user_data_dir
 from ..core.diagnostics import setup_logging
 
 logger = logging.getLogger("android_task_manager.gui")
@@ -115,12 +116,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         from .action_worker import ActionWorker
         from .baseline_worker import BaselineWorker
+        from .device_report_worker import DeviceReportWorker
         from .incident_worker import IncidentWorker
         from .inspector_worker import ProcessInspectionWorker
         from .main_window import (
             MainWindow,
             wire,
             wire_actions,
+            wire_device_report,
             wire_incident,
             wire_inspector,
             wire_permissions,
@@ -158,6 +161,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         device_serial=args.device_serial,
     )
     window = MainWindow()
+    # Per-device baseline persistence: the platform user-data directory
+    # (e.g. %LOCALAPPDATA%\AndroidTaskManager on Windows). The window
+    # auto-loads a stored baseline per device and saves new ones here.
+    window.baseline_store = BaselineStore(user_data_dir())
     worker = MonitorWorker(
         connection=connection,
         timeout=args.timeout,
@@ -173,6 +180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     baseline_worker = BaselineWorker(connection=connection, timeout=args.timeout)
     permission_worker = PermissionWorker(connection=connection, timeout=args.timeout)
     incident_worker = IncidentWorker()
+    device_report_worker = DeviceReportWorker()
     update_worker = UpdateWorker(current_version=__version__)
     wire(window, worker)
     wire_inspector(window, inspector)
@@ -180,6 +188,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     wire_security(window, baseline_worker)
     wire_permissions(window, permission_worker)
     wire_incident(window, incident_worker)
+    wire_device_report(window, device_report_worker)
     wire_updates(window, update_worker)
 
     # First-run setup flow: the window asks; the shared connection + worker
@@ -235,6 +244,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     incident_thread = QThread()
     incident_worker.moveToThread(incident_thread)
 
+    device_report_thread = QThread()
+    device_report_worker.moveToThread(device_report_thread)
+
     update_thread = QThread()
     update_worker.moveToThread(update_thread)
 
@@ -245,6 +257,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         baseline_thread,
         permission_thread,
         incident_thread,
+        device_report_thread,
         update_thread,
     ]
 
@@ -278,6 +291,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     baseline_thread.start()
     permission_thread.start()
     incident_thread.start()
+    device_report_thread.start()
     update_thread.start()
     window.show()
     return app.exec()

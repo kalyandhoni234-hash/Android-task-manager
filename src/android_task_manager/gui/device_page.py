@@ -26,13 +26,14 @@ Facts-first rules:
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QProgressBar,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -221,6 +222,10 @@ _ANNOTATION_LABEL = {
 class DevicePage(QWidget):
     """The DEVICE navigation destination: summary + fact cards."""
 
+    #: The user asked to export the device report (MainWindow opens the
+    #: save dialog, builds the payload and hands the write to a worker).
+    export_requested = Signal()
+
     def __init__(
         self,
         device_widget: DeviceWidget,
@@ -278,6 +283,24 @@ class DevicePage(QWidget):
         note.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(note)
 
+        export_row = QHBoxLayout()
+        export_row.setSpacing(8)
+        self._export_btn = QPushButton("Export Device Report")
+        self._export_btn.setObjectName("secondary")
+        self._export_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._export_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._export_btn.setEnabled(False)
+        self._export_btn.clicked.connect(self.export_requested.emit)
+        self._exporting = False
+        self._export_status = QLabel("")
+        self._export_status.setObjectName("muted")
+        self._export_status.setWordWrap(True)
+        self._export_status.setTextFormat(Qt.TextFormat.PlainText)
+        export_row.addWidget(self._export_btn)
+        export_row.addWidget(self._export_status, 1)
+        export_row.addStretch(1)
+        layout.addLayout(export_row)
+
         self._empty = QLabel(
             "NO DEVICE CONNECTED\n\n"
             "Connect an Android device through ADB to view device information."
@@ -304,6 +327,7 @@ class DevicePage(QWidget):
         """Re-render the page from one structured state bundle."""
         connected = state is ConnectionState.CONNECTED
         self._empty.setVisible(not connected)
+        self.set_export_available(connected)
         for card_name in self._values:
             self._cards[card_name].setVisible(connected)
         self._summary_line.setVisible(connected)
@@ -317,6 +341,29 @@ class DevicePage(QWidget):
         values.update(_live_values(battery, memory, cpu))
         for card_name, spec in _CARD_SPECS.items():
             self._render_card(card_name, spec, values)
+
+    # ------------------------------------------------------------------
+    # Device report export state (GUI thread; MainWindow calls this)
+    # ------------------------------------------------------------------
+
+    def set_export_available(self, available: bool) -> None:
+        """Enable the export button only while a device is connected."""
+        self._export_btn.setEnabled(available and not self._exporting)
+        if not available:
+            self._export_status.setText("")
+
+    def set_export_busy(self, busy: bool) -> None:
+        """Lock the button while an export is being written."""
+        self._exporting = busy
+        self._export_btn.setEnabled(not busy)
+        if busy:
+            self._export_status.setText("Exporting…")
+
+    def show_export_result(self, success: bool, message: str) -> None:
+        """Render the worker's outcome; failures stay visible and honest."""
+        self._exporting = False
+        self._export_btn.setEnabled(True)
+        self._export_status.setText(message)
 
     def _render_annotations(
         self, diagnostics: DiagnosticReport | None

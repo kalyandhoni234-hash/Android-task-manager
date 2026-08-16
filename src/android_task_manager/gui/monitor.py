@@ -95,6 +95,10 @@ class MonitorWorker(QObject):
     #: (DeviceInformation) — the structured identity snapshot, emitted once
     #: per successful connection (static facts are cached for the session).
     device_information = Signal(object)
+    #: (serial) — the ADB serial of the connected device, emitted once per
+    #: successful connection. The serial is already read by ``_connect``
+    #: (``require_device``); publishing it adds no ADB traffic.
+    serial_ready = Signal(str)
     #: (ConnectionState, error_detail)
     connection_changed = Signal(object, str)
     #: (list[dict]) — attached devices for the multi-device selection UI. Each
@@ -225,6 +229,7 @@ class MonitorWorker(QObject):
             self.device_information.emit(self._device_info_collector.sample())
             self._connected = True
             self.connection_changed.emit(ConnectionState.CONNECTED, "")
+            self.serial_ready.emit(serial)
         except ADBNotFoundError as exc:
             self._connect_failed(ConnectionState.ADB_MISSING, exc)
         except ADBAmbiguousDeviceError as exc:

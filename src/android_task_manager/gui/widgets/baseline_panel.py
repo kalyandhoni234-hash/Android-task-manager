@@ -175,19 +175,27 @@ class BaselinePanel(QWidget):
     # State entry points (MainWindow calls these on the GUI thread)
     # ------------------------------------------------------------------
 
-    def set_baseline(self, baseline: BaselineSnapshot | None) -> None:
+    def set_baseline(
+        self, baseline: BaselineSnapshot | None, source: str = "created"
+    ) -> None:
         """Adopt a baseline (or clear it). Drift state resets with it:
         a fresh baseline invalidates the previous report honestly.
         Any in-flight operation lock is released — a completed save is
-        what called us."""
+        what called us.
+
+        ``source`` labels where the baseline came from: ``"created"``
+        (captured in this session) or ``"loaded"`` (restored from disk).
+        """
         self._operation_busy = False
         self._exporting = False
         self._baseline = baseline
         self._report = None
         if baseline is None:
             self._baseline_label.setText("Baseline: Not set")
+        elif source == "loaded":
+            self._baseline_label.setText(f"Baseline: {_fmt_when(baseline.created_at)} (loaded)")
         else:
-            self._baseline_label.setText(f"Baseline: {_fmt_when(baseline.created_at)}")
+            self._baseline_label.setText(f"Baseline: {_fmt_when(baseline.created_at)} (created)")
         self._checked_label.setText("Last checked: —")
         self._drift_summary.setText("No drift check yet")
         self._unverified.hide()
@@ -232,6 +240,11 @@ class BaselinePanel(QWidget):
         self._exporting = False
         self._show_status(f"Baseline save failed: {message}", warn=True)
         self._refresh_buttons()
+
+    def show_persist_failed(self, message: str) -> None:
+        """The baseline exists in this session but could not be written to
+        disk; the user must know it will not survive a restart."""
+        self._show_status(f"Baseline could not be saved to disk: {message}", warn=True)
 
     def show_drift_failed(self, message: str) -> None:
         self._operation_busy = False

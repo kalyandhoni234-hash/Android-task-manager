@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime
 
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
@@ -20,6 +21,7 @@ from .. import __version__
 from ..action.models import ActionResult
 from ..baseline import (
     BaselineSnapshot,
+    BaselineStore,
     DriftReport,
     Session,
     new_process_refs,
@@ -32,6 +34,7 @@ from ..baseline.models import (
 from ..battery.models import BatterySnapshot
 from ..cpu.models import CPUSnapshot
 from ..device.models import DeviceInformation
+from ..device_report import DeviceReportPayload, device_report_filename
 from ..diagnostics.evaluate import evaluate as evaluate_diagnostics
 from ..diagnostics.models import DiagnosticReport, DiagnosticSeverity
 from ..heuristics import HeuristicReport
@@ -121,6 +124,9 @@ class MainWindow(QMainWindow):
     #: (kind, path, IncidentReport) the user picked an incident-report target.
     incident_export_requested = Signal(str, str, object)
 
+    #: (path, DeviceReportPayload) the user picked a device-report target.
+    device_report_export_requested = Signal(str, object)
+
     #: The user's session started; the app runs the one-shot update check.
     update_check_requested = Signal()
 
@@ -172,6 +178,11 @@ class MainWindow(QMainWindow):
         self._current_snapshot: BaselineSnapshot | None = None
         self._drift_report: DriftReport | None = None
 
+        #: Persistent per-device baseline store (assigned by the app with
+        #: the platform user-data directory). ``None`` in tests keeps the
+        #: GUI hermetic: nothing is ever read or written without a store.
+        self.baseline_store: BaselineStore | None = None
+
         #: Incident reporting GUI-layer state: the last heuristic report,
         #: the permission audits seen so far (bounded), the generated report
         #: and the (lazily created) viewer dialog.
@@ -181,6 +192,10 @@ class MainWindow(QMainWindow):
         self._incident_dialog: IncidentDialog | None = None
         self._device_label: str | None = None
         self._android_version: str | None = None
+
+        #: ADB serial of the connected device (published by the monitor's
+        #: connection state; used for export filenames and baseline lookup).
+        self._device_serial: str | None = None
 
         #: Structured identity snapshot of the connected device (collected
         #: once per connection session); None when nothing is connected.
@@ -227,6 +242,7 @@ class MainWindow(QMainWindow):
         self.findings.why_requested.connect(self._on_why_requested)
         self.device_page = DevicePage(self.device)
         self.diagnostics_page = DiagnosticsPage()
+        self.device_page.export_requested.connect(self._on_device_report_export_requested)
 
         self._pages = QStackedWidget()
         self._pages.setObjectName("pages")
@@ -491,11 +507,24 @@ class MainWindow(QMainWindow):
             self._latest_processes = None
             self._latest_network_investigation = None
             self._diagnostics_report = None
+            self._device_serial = None
             self.diagnostics_page.refresh(None, False)
             self._stack.setCurrentIndex(0)
             self.setup.show_state(state, detail)
         self._refresh_overview()
         self._refresh_device_page()
+
+    def on_serial_ready(self, serial: str) -> None:
+        """Adopt the connected device's ADB serial (monitor thread publishes
+        it once per successful connection; zero additional ADB traffic).
+
+        The serial drives the device-report filename and the persisted
+        baseline lookup. A stored baseline from this exact device is
+        auto-loaded only when no session baseline exists yet — a baseline
+        captured in this session always wins over disk state.
+        """
+        self._device_serial = serial
+        self._auto_load_baseline()
 
     def show_usb_help(self) -> None:
         QMessageBox.information(self, "Enable USB debugging", USB_DEBUGGING_STEPS)
@@ -577,22 +606,50 @@ class MainWindow(QMainWindow):
     # Baseline & Security handlers (GUI thread; results from BaselineWorker)
     # ------------------------------------------------------------------
 
-    def on_baseline_saved(self, snapshot: BaselineSnapshot) -> None:
+    def on_baseline_saved(
+        self, snapshot: BaselineSnapshot, source: str = "created"
+    ) -> None:
         """Adopt a fresh baseline; drift state resets with it.
 
         The previous report belongs to the old baseline, so the drift
         display, the NEW badges and the export buttons all reset honestly.
+
+        ``source`` distinguishes a session capture (``"created"``) from a
+        disk restore (``"loaded"``). Unless no store is configured, the
+        baseline is also persisted per device — a write failure is shown
+        as a status warning, never silently swallowed.
         """
         self._baseline = snapshot
         self._current_snapshot = None
         self._drift_report = None
         self._observation_tracker.reset()
         self._stability = None
-        self.security.set_baseline(snapshot)
+        self.security.set_baseline(snapshot, source=source)
         self.processes.set_new_process_refs(frozenset())
         self.processes.inspector.set_new_socket_identities(frozenset())
         self._reset_incident_state()
         self._refresh_overview()
+        if source == "created" and self.baseline_store is not None:
+            try:
+                self.baseline_store.save(snapshot)
+            except OSError as exc:
+                self.security.show_persist_failed(str(exc))
+
+    def _auto_load_baseline(self) -> None:
+        """Restore the stored baseline of the connected device.
+
+        Runs once per connection, and only when no session baseline exists
+        yet — a baseline captured in this session always wins over disk
+        state. Missing/corrupt store files simply leave the empty state.
+        """
+        if self._baseline is not None or self.baseline_store is None:
+            return
+        if self._device_serial is None:
+            return
+        snapshot = self.baseline_store.load(self._device_serial)
+        if snapshot is None:
+            return
+        self.on_baseline_saved(snapshot, source="loaded")
 
     def _reset_incident_state(self) -> None:
         """A fresh baseline invalidates every incident artifact honestly:
@@ -809,6 +866,48 @@ class MainWindow(QMainWindow):
             self._incident_dialog.show_export_result(success, message)
 
     # ------------------------------------------------------------------
+    # Device report export (GUI thread assembles; worker writes)
+    # ------------------------------------------------------------------
+
+    def _on_device_report_export_requested(self) -> None:
+        """Ask for a file target, assemble the payload, hand it to the worker.
+
+        The payload is built from already-collected snapshots (zero ADB
+        traffic) and the file write happens on the worker thread. A
+        cancelled dialog is a clean no-op; no device means an honest status
+        instead of an empty artifact.
+        """
+        if self._device_serial is None:
+            self.device_page.show_export_result(
+                False, "No device connected — nothing to export."
+            )
+            return
+        generated_at = datetime.now()
+        payload = DeviceReportPayload(
+            info=self.device_information,
+            battery=self._latest_battery,
+            memory=self._latest_memory,
+            cpu=self._latest_cpu,
+            diagnostics=self._diagnostics_report,
+            device_serial=self._device_serial,
+            generated_at=generated_at,
+        )
+        default_name = device_report_filename(self._device_serial, generated_at)
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export device report",
+            default_name,
+            "JSON file (*.json)",
+        )
+        if not path:
+            return
+        self.device_page.set_export_busy(True)
+        self.device_report_export_requested.emit(path, payload)
+
+    def on_device_report_export_completed(self, success: bool, message: str) -> None:
+        self.device_page.show_export_result(success, message)
+
+    # ------------------------------------------------------------------
     # Investigation-core handlers (GUI thread; pure in-memory aggregation)
     # ------------------------------------------------------------------
 
@@ -958,6 +1057,7 @@ def wire(window: MainWindow, worker: MonitorWorker) -> None:
     worker.device_info.connect(window.update_device)
     worker.device_information.connect(window.update_device_information)
     worker.connection_changed.connect(window.update_connection)
+    worker.serial_ready.connect(window.on_serial_ready)
     worker.devices_available.connect(window.update_devices)
     window.closed.connect(worker.stop)
     window.overview.baseline_requested.connect(
@@ -1023,6 +1123,18 @@ def wire_incident(window: MainWindow, worker) -> None:
     """
     window.incident_export_requested.connect(worker.request_export)
     worker.export_completed.connect(window.on_incident_export_completed)
+
+
+def wire_device_report(window: MainWindow, worker) -> None:
+    """Connect the DeviceReportWorker's signals to the window.
+
+    The payload is assembled on the GUI thread from already-collected
+    snapshots (pure, zero ADB); only the JSON write is handed to the
+    worker. Results come back over queued connections; the GUI thread
+    only renders.
+    """
+    window.device_report_export_requested.connect(worker.request_export)
+    worker.export_completed.connect(window.on_device_report_export_completed)
 
 
 def wire_permissions(window: MainWindow, worker) -> None:
