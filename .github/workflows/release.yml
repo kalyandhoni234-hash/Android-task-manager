@@ -16,9 +16,61 @@ permissions:
   contents: write
 
 jobs:
+  gate:
+    name: Release gate (tests + version match)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install project (core, dev, and GUI extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[dev,gui]"
+
+      - name: Run test suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+
+      - name: Ruff check (src + tests)
+        run: python -m ruff check src tests
+
+      - name: Mypy (core + adb)
+        run: |
+          python -m mypy \
+            src/android_task_manager/core \
+            src/android_task_manager/adb
+
+      - name: Dependency audit (pip-audit)
+        run: python -m pip_audit
+
+      # A release tag must match the package version exactly; a mismatched
+      # tag (or a stale version bump) fails the workflow before any artifact
+      # is built or published.
+      - name: Assert tag version matches package version
+        run: |
+          VERSION="$(python -c 'import android_task_manager; print(android_task_manager.__version__)')"
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ -z "${TAG}" ]; then
+            echo "::error::No version tag on this ref (${GITHUB_REF_NAME})."
+            exit 1
+          fi
+          if [ "${VERSION}" != "${TAG}" ]; then
+            echo "::error::Package version ${VERSION} does not match tag v${TAG}."
+            exit 1
+          fi
+          echo "Package version ${VERSION} matches tag v${TAG}"
+
   build-windows:
     name: Build Windows executables
     runs-on: windows-latest
+    needs: gate
 
     steps:
       - uses: actions/checkout@v4
