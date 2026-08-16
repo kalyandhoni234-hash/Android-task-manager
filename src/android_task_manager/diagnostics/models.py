@@ -79,6 +79,18 @@ class DiagnosticReport:
 
     findings: tuple[DiagnosticFinding, ...]
 
+    @property
+    def counts(self) -> dict[DiagnosticSeverity, int]:
+        """Findings per severity (all three levels always present)."""
+        counts = {
+            DiagnosticSeverity.INFO: 0,
+            DiagnosticSeverity.WARNING: 0,
+            DiagnosticSeverity.CRITICAL: 0,
+        }
+        for finding in self.findings:
+            counts[finding.severity] += 1
+        return counts
+
 
 __all__ = [
     "DiagnosticCategory",

@@ -36,6 +36,9 @@ class OverviewState:
     audits_run: int | None = None
     rules_checked: int | None = None
     signals_seen: int | None = None
+    diagnostics_critical: int | None = None
+    diagnostics_warning: int | None = None
+    diagnostics_info: int | None = None
 
 
 class OverviewPage(QWidget):
@@ -43,6 +46,8 @@ class OverviewPage(QWidget):
 
     #: The user asked to open the Baseline page (empty-state shortcut).
     baseline_requested = Signal()
+    #: The user asked to open the Diagnostics page.
+    diagnostics_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -96,6 +101,33 @@ class OverviewPage(QWidget):
             grid.addWidget(card, 0, column)
             grid.setColumnStretch(column, 1)
         layout.addLayout(grid)
+
+        # -- Diagnostics ------------------------------------------------------
+        diagnostics_card = QWidget()
+        diagnostics_card.setObjectName("metricCard")
+        diagnostics_layout = QVBoxLayout(diagnostics_card)
+        diagnostics_layout.setContentsMargins(14, 12, 14, 12)
+        diagnostics_layout.setSpacing(4)
+
+        diagnostics_title = QLabel("DIAGNOSTICS")
+        diagnostics_title.setObjectName("sectionTitle")
+        diagnostics_layout.addWidget(diagnostics_title)
+
+        self._diagnostics_line = QLabel("Diagnostics will appear once a device is connected.")
+        self._diagnostics_line.setObjectName("securityStatus")
+        self._diagnostics_line.setWordWrap(True)
+        self._diagnostics_line.setTextFormat(Qt.TextFormat.PlainText)
+        diagnostics_layout.addWidget(self._diagnostics_line)
+
+        self._diagnostics_link = QPushButton("Review on the Diagnostics page")
+        self._diagnostics_link.setObjectName("link")
+        self._diagnostics_link.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._diagnostics_link.setAccessibleName("Review on the Diagnostics page")
+        self._diagnostics_link.setVisible(False)
+        self._diagnostics_link.clicked.connect(self.diagnostics_requested.emit)
+        diagnostics_layout.addWidget(self._diagnostics_link)
+
+        layout.addWidget(diagnostics_card)
 
         # -- Security status -------------------------------------------------
         security_card = QWidget()
@@ -153,6 +185,7 @@ class OverviewPage(QWidget):
         """Re-render the whole page from one immutable summary state."""
         self._render_device(state)
         self._render_cards(state)
+        self._render_diagnostics(state)
         self._render_security(state)
         self._render_activity(state)
 
@@ -193,6 +226,34 @@ class OverviewPage(QWidget):
             else:
                 label.setObjectName("cardValue")
             repolish(label)
+
+    def _render_diagnostics(self, state: OverviewState) -> None:
+        critical = state.diagnostics_critical
+        warning = state.diagnostics_warning
+        info = state.diagnostics_info
+        if critical is None and warning is None and info is None:
+            self._diagnostics_line.setText(
+                "Diagnostics will appear once a device is connected."
+            )
+            self._diagnostics_line.setObjectName("securityStatus")
+            self._diagnostics_link.setVisible(False)
+        elif critical or warning or info:
+            self._diagnostics_line.setText(
+                f"{critical or 0} CRITICAL \u00b7 {warning or 0} WARNING \u00b7 "
+                f"{info or 0} INFO"
+            )
+            if critical:
+                self._diagnostics_line.setObjectName("securityStatusHigh")
+            elif warning:
+                self._diagnostics_line.setObjectName("securityStatusMedium")
+            else:
+                self._diagnostics_line.setObjectName("securityStatus")
+            self._diagnostics_link.setVisible(True)
+        else:
+            self._diagnostics_line.setText("No issues detected.")
+            self._diagnostics_line.setObjectName("securityStatus")
+            self._diagnostics_link.setVisible(True)
+        repolish(self._diagnostics_line)
 
     def _render_security(self, state: OverviewState) -> None:
         high = state.high_findings or 0

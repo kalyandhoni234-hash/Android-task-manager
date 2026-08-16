@@ -208,6 +208,7 @@ def test_navigation_switches_pages(qtapp) -> None:
         "findings": 4,
         "device": 5,
         "health": 6,
+        "diagnostics": 7,
     }
     for key, index in expectations.items():
         window.sidebar.button(key).click()

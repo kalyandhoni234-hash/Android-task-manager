@@ -347,6 +347,21 @@ QLabel#findingSeverity[level="high"] {
 QLabel#findingSeverity[level="elevated"] {
     color: #f5a524;
 }
+QLabel#findingSeverity[level="info"] {
+    color: #3d9be9;
+}
+QWidget#diagCardInfo {
+    background-color: #1d232b;
+    border: 1px solid #2a323c;
+    border-left: 3px solid #3d9be9;
+    border-radius: 8px;
+}
+QLabel#diagField {
+    color: #7a8794;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
 QLabel#findingRule {
     color: #d8dee6;
     font-weight: 600;

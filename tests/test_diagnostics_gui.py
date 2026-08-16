@@ -182,7 +182,7 @@ def test_exported_report_never_uploads(qtapp, log_dir, tmp_path, monkeypatch) ->
 def test_sidebar_has_diagnostics_entry(qtapp) -> None:
     window = MainWindow()
     button = window.sidebar.diagnostics_button
-    assert button.text() == "Diagnostics"
+    assert button.text() == "Diagnostic Log"
     assert not button.isCheckable()
     assert window._pages.currentIndex() == 0  # the action never changes pages
 

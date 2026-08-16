@@ -23,7 +23,7 @@ SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     ("OVERVIEW", (("overview", "Overview"),)),
     ("MONITOR", (("processes", "Processes"), ("network", "Network"))),
     ("SECURITY", (("baseline", "Baseline"), ("findings", "Findings"))),
-    ("DEVICE", (("device", "Device"), ("health", "Health"))),
+    ("DEVICE", (("device", "Device"), ("health", "Health"), ("diagnostics", "Diagnostics"))),
 )
 
 #: The page shown when the dashboard first appears.
@@ -76,18 +76,19 @@ class Sidebar(QWidget):
             layout.addSpacing(8)
         layout.addStretch(1)
 
-        # Diagnostics is an action, not a page: it stays outside the page
-        # button group so it can never be the "active page".
+        # Diagnostics Log is an action, not a page: it stays outside the
+        # page button group so it can never be the "active page". (The
+        # "Diagnostics" page button lives in the DEVICE section above.)
         system_label = QLabel("SYSTEM")
         system_label.setObjectName("navSection")
         system_label.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(system_label)
         layout.addSpacing(2)
-        self.diagnostics_button = QPushButton("Diagnostics")
+        self.diagnostics_button = QPushButton("Diagnostic Log")
         self.diagnostics_button.setObjectName("navButton")
         self.diagnostics_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.diagnostics_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.diagnostics_button.setAccessibleName("Diagnostics")
+        self.diagnostics_button.setAccessibleName("Diagnostic Log")
         self.diagnostics_button.clicked.connect(self.diagnostics_requested.emit)
         layout.addWidget(self.diagnostics_button)
 

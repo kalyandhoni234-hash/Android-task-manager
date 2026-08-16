@@ -32,6 +32,8 @@ from ..baseline.models import (
 from ..battery.models import BatterySnapshot
 from ..cpu.models import CPUSnapshot
 from ..device.models import DeviceInformation
+from ..diagnostics.evaluate import evaluate as evaluate_diagnostics
+from ..diagnostics.models import DiagnosticReport, DiagnosticSeverity
 from ..heuristics import HeuristicReport
 from ..incident.builder import build_incident_report
 from ..incident.models import SOURCE_GUI, IncidentReport
@@ -52,6 +54,7 @@ from ..updater import UpdateCheckResult
 from .connection_strip import ConnectionStrip
 from .device_page import DevicePage
 from .diagnostics_dialog import DiagnosticsDialog
+from .diagnostics_page import DiagnosticsPage
 from .findings_page import FindingsPage
 from .incident_dialog import IncidentDialog
 from .investigation_dialog import InvestigationDialog
@@ -183,6 +186,11 @@ class MainWindow(QMainWindow):
         #: once per connection session); None when nothing is connected.
         self.device_information: DeviceInformation | None = None
 
+        #: Most recent diagnostics report (pure evaluation of the latest
+        #: snapshots + device information on the GUI thread). None when no
+        #: device is connected — a report must never outlive its device.
+        self._diagnostics_report: DiagnosticReport | None = None
+
         #: Investigation-core GUI-layer state: the observation window fed
         #: by the monitor (deduped, bounded), the stability reports of the
         #: last drift check, and the lazily created investigation dialogs.
@@ -218,6 +226,7 @@ class MainWindow(QMainWindow):
         self.findings = FindingsPage(self.incident)
         self.findings.why_requested.connect(self._on_why_requested)
         self.device_page = DevicePage(self.device)
+        self.diagnostics_page = DiagnosticsPage()
 
         self._pages = QStackedWidget()
         self._pages.setObjectName("pages")
@@ -228,6 +237,7 @@ class MainWindow(QMainWindow):
         self._pages.addWidget(self._scrolled(self.findings))  # 4: FINDINGS
         self._pages.addWidget(self._scrolled(self.device_page))  # 5: DEVICE
         self._pages.addWidget(self._scrolled(self._health_page()))  # 6: HEALTH
+        self._pages.addWidget(self._scrolled(self.diagnostics_page))  # 7: DIAGNOSTICS
 
         self.sidebar.set_active(DEFAULT_PAGE)
         self._pages.setCurrentIndex(0)
@@ -286,6 +296,7 @@ class MainWindow(QMainWindow):
             "findings": 4,
             "device": 5,
             "health": 6,
+            "diagnostics": 7,
         }
         index = order.get(key)
         if index is None:
@@ -315,6 +326,7 @@ class MainWindow(QMainWindow):
             if heuristics
             else None
         )
+        report = self._diagnostics_report
         self.overview.refresh(
             OverviewState(
                 device_label=self._device_label,
@@ -346,6 +358,15 @@ class MainWindow(QMainWindow):
                     len(heuristics.rules_applied) if heuristics is not None else None
                 ),
                 signals_seen=len(heuristics.signals) if heuristics is not None else None,
+                diagnostics_critical=(
+                    report.counts[DiagnosticSeverity.CRITICAL] if report is not None else None
+                ),
+                diagnostics_warning=(
+                    report.counts[DiagnosticSeverity.WARNING] if report is not None else None
+                ),
+                diagnostics_info=(
+                    report.counts[DiagnosticSeverity.INFO] if report is not None else None
+                ),
             )
         )
 
@@ -361,7 +382,29 @@ class MainWindow(QMainWindow):
             self._latest_memory,
             self._latest_cpu,
             self._connection_state,
+            self._diagnostics_report,
         )
+
+    def _evaluate_diagnostics(self) -> None:
+        """Evaluate the diagnostics rules over the latest collected data.
+
+        Pure and deterministic — no device I/O, no timers, no new ADB
+        traffic (it only consumes snapshots already flowing through the
+        monitor). The page is refreshed only when the report actually
+        changed, so widget churn is limited to genuine state changes.
+        """
+        report = evaluate_diagnostics(
+            cpu=self._latest_cpu,
+            memory=self._latest_memory,
+            battery=self._latest_battery,
+            device=self.device_information,
+        )
+        if report != self._diagnostics_report:
+            self._diagnostics_report = report
+            self.diagnostics_page.refresh(
+                report,
+                self._connection_state is ConnectionState.CONNECTED,
+            )
 
     # ------------------------------------------------------------------
     # Monitor signal handlers (GUI thread)
@@ -399,6 +442,7 @@ class MainWindow(QMainWindow):
             self.battery.set_snapshot(battery)
         if network is not None:
             self.network.set_snapshot(network)
+        self._evaluate_diagnostics()
         self._refresh_overview()
         self._refresh_device_page()
 
@@ -413,6 +457,8 @@ class MainWindow(QMainWindow):
     def update_device_information(self, info: DeviceInformation) -> None:
         """Adopt the structured identity snapshot of the connected device."""
         self.device_information = info
+        self._evaluate_diagnostics()
+        self._refresh_overview()
         self._refresh_device_page()
 
     def update_network_investigation(
@@ -444,6 +490,8 @@ class MainWindow(QMainWindow):
             self._latest_battery = None
             self._latest_processes = None
             self._latest_network_investigation = None
+            self._diagnostics_report = None
+            self.diagnostics_page.refresh(None, False)
             self._stack.setCurrentIndex(0)
             self.setup.show_state(state, detail)
         self._refresh_overview()
@@ -914,6 +962,9 @@ def wire(window: MainWindow, worker: MonitorWorker) -> None:
     window.closed.connect(worker.stop)
     window.overview.baseline_requested.connect(
         lambda: window._on_page_requested("baseline")
+    )
+    window.overview.diagnostics_requested.connect(
+        lambda: window._on_page_requested("diagnostics")
     )
 
 

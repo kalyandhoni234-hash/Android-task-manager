@@ -40,9 +40,15 @@ from PySide6.QtWidgets import (
 from ..battery.models import BatterySnapshot, BatteryStatus
 from ..cpu.models import CPUSnapshot
 from ..device.models import DeviceInformation, StorageInfo
+from ..diagnostics.models import (
+    DiagnosticCategory,
+    DiagnosticReport,
+    DiagnosticSeverity,
+)
 from ..memory.models import MemorySnapshot
 from ..terminal.renderer import format_kib
 from .monitor import ConnectionState
+from .styles import repolish
 from .widgets import panel
 from .widgets.device_widget import DeviceWidget
 
@@ -196,6 +202,21 @@ _VERITY_LABELS = {
     "disabled": "Disabled",
 }
 
+#: Category cards that carry a diagnostics annotation: (card name, category).
+#: Only BATTERY / STORAGE / SECURITY are annotated — the diagnostics rules
+#: that speak to the page's fact cards live in those categories.
+_ANNOTATED_CARDS = (
+    ("BATTERY", DiagnosticCategory.BATTERY),
+    ("STORAGE", DiagnosticCategory.STORAGE),
+    ("SECURITY", DiagnosticCategory.SECURITY),
+)
+
+#: Severity label prefix for annotation lines (text, never color-only).
+_ANNOTATION_LABEL = {
+    DiagnosticSeverity.CRITICAL: "CRITICAL",
+    DiagnosticSeverity.WARNING: "WARNING",
+}
+
 
 class DevicePage(QWidget):
     """The DEVICE navigation destination: summary + fact cards."""
@@ -234,6 +255,7 @@ class DevicePage(QWidget):
         self._cards: dict[str, QFrame] = {}
         self._values: dict[str, dict[str, QLabel]] = {}
         self._na: dict[str, QLabel] = {}
+        self._notes: dict[str, QLabel] = {}
         self._storage_bar: QProgressBar | None = None
 
         grid = QGridLayout()
@@ -277,6 +299,7 @@ class DevicePage(QWidget):
         memory: MemorySnapshot | None,
         cpu: CPUSnapshot | None,
         state: ConnectionState | None,
+        diagnostics: DiagnosticReport | None = None,
     ) -> None:
         """Re-render the page from one structured state bundle."""
         connected = state is ConnectionState.CONNECTED
@@ -284,6 +307,7 @@ class DevicePage(QWidget):
         for card_name in self._values:
             self._cards[card_name].setVisible(connected)
         self._summary_line.setVisible(connected)
+        self._render_annotations(diagnostics)
         if not connected:
             self._reset_values()
             return
@@ -294,6 +318,44 @@ class DevicePage(QWidget):
         for card_name, spec in _CARD_SPECS.items():
             self._render_card(card_name, spec, values)
 
+    def _render_annotations(
+        self, diagnostics: DiagnosticReport | None
+    ) -> None:
+        """Attach the first WARNING+ finding of a category to its card.
+
+        The report is already ordered severity-first, so ``next()`` over
+        its findings yields the most severe one of the category without
+        any re-sorting here. Annotations are text + color (the severity
+        word is always visible), never color alone.
+        """
+        for card_name, category in _ANNOTATED_CARDS:
+            note = self._notes[card_name]
+            finding = None
+            if diagnostics is not None:
+                finding = next(
+                    (
+                        f
+                        for f in diagnostics.findings
+                        if f.category is category
+                        and f.severity in _ANNOTATION_LABEL
+                    ),
+                    None,
+                )
+            if finding is None:
+                note.hide()
+                continue
+            note.setText(
+                f"\u26a0 {_ANNOTATION_LABEL[finding.severity]}: {finding.title}"
+            )
+            note.setObjectName(
+                "statusError"
+                if finding.severity is DiagnosticSeverity.CRITICAL
+                else "statusWarn"
+            )
+            note.setToolTip(finding.evidence)
+            repolish(note)
+            note.show()
+
     def _reset_values(self) -> None:
         """Clear every value label so nothing stale survives a disconnect."""
         for card_name, spec in _CARD_SPECS.items():
@@ -302,6 +364,8 @@ class DevicePage(QWidget):
                 label.setText(_UNKNOWN)
                 label.setToolTip("")
             self._na[card_name].setVisible(True)
+        for note in self._notes.values():
+            note.hide()
         if self._storage_bar is not None:
             self._storage_bar.setValue(0)
 
@@ -372,6 +436,14 @@ class DevicePage(QWidget):
         na.setObjectName("muted")
         na.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(na)
+        if title in {card_name for card_name, _category in _ANNOTATED_CARDS}:
+            note = QLabel("")
+            note.setObjectName("statusWarn")
+            note.setWordWrap(True)
+            note.setTextFormat(Qt.TextFormat.PlainText)
+            note.hide()
+            layout.addWidget(note)
+            self._notes[title] = note
         layout.addStretch(1)
         return card, values, na
 

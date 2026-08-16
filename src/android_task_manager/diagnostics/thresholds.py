@@ -1,38 +1,52 @@
 """Diagnostics thresholds.
 
-Values mirror the canonical presentation thresholds in
-``gui/thresholds.py`` (CPU, memory, temperature): the diagnostics engine
-is a pure core layer and must not import from the GUI package, so the
-values are restated here with their documented meaning. A later phase may
-unify the two modules when the GUI thresholds move into the core layer.
+Shared values (CPU, memory, temperature) derive from the single canonical
+source, ``android_task_manager.thresholds`` — the values are aliased here
+under severity-oriented names (ELEVATED -> WARNING, HIGH/CRITICAL ->
+CRITICAL) so rule code reads in the diagnostics severity vocabulary
+without ever restating a value.
 
 ``STORAGE_*`` thresholds are new: no storage thresholds existed anywhere
 in the codebase before the diagnostics layer. They are presentation
 heuristics with the same conservative spirit as the existing ones —
 terminology stays WARNING/CRITICAL, no device specification is cited.
-
-Severity mapping (existing GUI levels -> diagnostics severities):
-
-- ``_ELEVATED_`` thresholds -> WARNING
-- ``_HIGH`` / ``_CRITICAL_`` thresholds -> CRITICAL
 """
 
 from __future__ import annotations
 
+from ..thresholds import (
+    CPU_ELEVATED_PERCENT as _CANONICAL_CPU_ELEVATED,
+)
+from ..thresholds import (
+    CPU_HIGH_PERCENT as _CANONICAL_CPU_HIGH,
+)
+from ..thresholds import (
+    MEMORY_USED_ELEVATED_PERCENT as _CANONICAL_MEMORY_ELEVATED,
+)
+from ..thresholds import (
+    MEMORY_USED_HIGH_PERCENT as _CANONICAL_MEMORY_HIGH,
+)
+from ..thresholds import (
+    TEMPERATURE_ELEVATED_C as _CANONICAL_TEMPERATURE_ELEVATED,
+)
+from ..thresholds import (
+    TEMPERATURE_HIGH_C as _CANONICAL_TEMPERATURE_HIGH,
+)
+
 #: Aggregate CPU utilization above this percent is a WARNING.
-CPU_ELEVATED_PERCENT = 60.0
+CPU_ELEVATED_PERCENT = _CANONICAL_CPU_ELEVATED
 #: Aggregate CPU utilization at/above this percent is CRITICAL.
-CPU_CRITICAL_PERCENT = 85.0
+CPU_CRITICAL_PERCENT = _CANONICAL_CPU_HIGH
 
 #: Used share of total memory above this percent is a WARNING.
-MEMORY_ELEVATED_PERCENT = 70.0
+MEMORY_ELEVATED_PERCENT = _CANONICAL_MEMORY_ELEVATED
 #: Used share of total memory at/above this percent is CRITICAL.
-MEMORY_CRITICAL_PERCENT = 90.0
+MEMORY_CRITICAL_PERCENT = _CANONICAL_MEMORY_HIGH
 
 #: Battery temperature above this °C is a WARNING.
-TEMPERATURE_ELEVATED_C = 40.0
+TEMPERATURE_ELEVATED_C = _CANONICAL_TEMPERATURE_ELEVATED
 #: Battery temperature at/above this °C is CRITICAL.
-TEMPERATURE_CRITICAL_C = 45.0
+TEMPERATURE_CRITICAL_C = _CANONICAL_TEMPERATURE_HIGH
 
 #: Used share of the internal storage volume above this percent is a
 #: WARNING (operationally significant pressure starts around here).
