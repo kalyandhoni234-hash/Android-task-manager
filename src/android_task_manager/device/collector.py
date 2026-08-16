@@ -27,12 +27,14 @@ from .parser import (
     derive_cpu_64bit,
     khz_to_hz,
     parse_android_id,
+    parse_charge_full_design,
     parse_cpu_features,
     parse_cpu_hardware_line,
     parse_cpu_range,
     parse_cpufreq_khz,
     parse_cpuinfo_cores,
     parse_cpuinfo_model_name,
+    parse_cycle_count,
     parse_df_k,
     parse_epoch_seconds,
     parse_getprop_output,
@@ -40,6 +42,7 @@ from .parser import (
     parse_gpu_gles,
     parse_mac_address,
     parse_max_frequency_khz,
+    parse_mounts_filesystem,
     parse_orientation,
     parse_orientation_degrees,
     parse_proc_uptime,
@@ -102,6 +105,12 @@ _PROPERTY_KEYS = {
 #:     display facts  <- wm size / wm density / dumpsys display / dumpsys
 #:                       input; each command is read once per snapshot and
 #:                       parsed into several fields (never re-read per field).
+#:     battery_design_capacity / battery_cycle_count
+#:                    <- /sys/class/power_supply/battery/{charge_full_design,
+#:                       cycle_count}; STATIC facts only — dynamic battery
+#:                       data belongs to the live battery monitor.
+#:     storage_filesystem
+#:                    <- cat /proc/mounts (fs type of the /data mount).
 
 
 class DeviceInfoCollector:
@@ -158,6 +167,30 @@ class DeviceInfoCollector:
             parse_gpu_gles(surfaceflinger_text)
             if surfaceflinger_text is not None
             else (None, None)
+        )
+        battery_design_capacity = self._read(
+            lambda: parse_charge_full_design(
+                self._runner.shell(
+                    ["cat", "/sys/class/power_supply/battery/charge_full_design"],
+                    timeout=self._timeout,
+                )
+            )
+        )
+        battery_cycle_count = self._read(
+            lambda: parse_cycle_count(
+                self._runner.shell(
+                    ["cat", "/sys/class/power_supply/battery/cycle_count"],
+                    timeout=self._timeout,
+                )
+            )
+        )
+        mounts_text = self._read(
+            lambda: self._runner.shell(["cat", "/proc/mounts"], timeout=self._timeout)
+        )
+        storage_filesystem = (
+            parse_mounts_filesystem(mounts_text, ("/data", "/data/user/0"))
+            if mounts_text is not None
+            else None
         )
         return DeviceInformation(
             **_property_fields(props),
@@ -228,6 +261,9 @@ class DeviceInfoCollector:
             ),
             gpu_vendor=gpu_vendor,
             gpu_model=gpu_model,
+            battery_design_capacity=battery_design_capacity,
+            battery_cycle_count=battery_cycle_count,
+            storage_filesystem=storage_filesystem,
             storage=self._read(self._sample_storage),
             android_id=self._read(
                 lambda: parse_android_id(

@@ -120,7 +120,20 @@ class DeviceInformation:
     #: which is the core-0 hardware ceiling from cpuinfo_max_freq).
     cpu_max_frequency_hz: float | None = None
 
-    # -- GPU ------------------------------------------------------------------
+    # -- Battery (static facts only) --------------------------------------------
+    # NOTE: dynamic battery data (percentage, charging state, source, health,
+    # temperature, voltage, technology) is owned by the live battery monitor
+    # (``BatterySnapshot``, sampled every 15 s) and mirrored onto the Device
+    # page from those snapshots — never duplicated here.
+    #: Design capacity of the battery (``charge_full_design``). Kept
+    #: verbatim: the kernel convention is microamp-hours but OEMs vary, so
+    #: no unit conversion is claimed (same policy as the live snapshot's
+    #: ``charge_counter``).
+    battery_design_capacity: int | None = None
+    #: Battery charge cycle count (``cycle_count``); 0 is valid (new battery).
+    battery_cycle_count: int | None = None
+
+# -- GPU ------------------------------------------------------------------
     #: GPU vendor read from the ``dumpsys SurfaceFlinger`` GLES line (e.g.
     #: "Qualcomm", "ARM", "Imagination Technologies"). Only ever read from
     #: the device; never derived from the SoC/chipset.
@@ -153,6 +166,9 @@ class DeviceInformation:
     # -- Storage -------------------------------------------------------------
     #: Internal shared storage (/data). Volumes are never silently combined.
     storage: StorageInfo | None = None
+    #: Filesystem type of the primary internal volume (/data or
+    #: /data/user/0) from /proc/mounts, e.g. "ext4", "f2fs".
+    storage_filesystem: str | None = None
 
     # -- Identifiers (handled carefully; usually restricted) -----------------
     android_id: str | None = None

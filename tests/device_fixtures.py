@@ -197,8 +197,17 @@ def _normal() -> dict[str, str]:
         "uname -a": (
             "Linux localhost 4.14.186+ #1 SMP PREEMPT Wed Jun 2 12:00:00 2021 aarch64\n"
         ),
-        "cat /proc/uptime": "123456.78 987654.32\n",
+                "cat /proc/uptime": "123456.78 987654.32\n",
         "date +%s": "1622773057\n",
+        "cat /sys/class/power_supply/battery/charge_full_design": "4880000\n",
+        "cat /sys/class/power_supply/battery/cycle_count": "412\n",
+        "cat /proc/mounts": (
+            "rootfs / rootfs rw 0 0\n"
+            "tmpfs /dev tmpfs rw,seclabel,nosuid,relatime,mode=755 0 0\n"
+            "/dev/block/dm-0 /system ext4 ro,seclabel,relatime 0 0\n"
+            "/dev/block/dm-5 /data ext4 rw,seclabel,nosuid,nodev,noatime,inlinecrypt 0 0\n"
+            "/dev/block/sda1 /storage/emulated fuse rw,nosuid,nodev,noexec,noatime 0 0\n"
+        ),
         "wm size": "Physical size: 1080x2340\n",
         "wm density": "Physical density: 440\n",
         "dumpsys display": (

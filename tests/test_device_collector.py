@@ -90,6 +90,9 @@ def test_normal_device_full_snapshot() -> None:
     assert info.supported_refresh_rates_hz == pytest.approx((60.000004, 90.0))
     assert info.gpu_vendor == "Qualcomm"
     assert info.gpu_model == "Adreno (TM) 610"
+    assert info.battery_design_capacity == 4880000  # charge_full_design, verbatim
+    assert info.battery_cycle_count == 412
+    assert info.storage_filesystem == "ext4"  # /proc/mounts /data entry
     assert info.android_id == "a1b2c3d4e5f60718"
     assert info.wifi_mac == "3c:28:6d:ab:cd:ef"
     assert info.bluetooth_mac == "aa:bb:cc:dd:ee:ff"
@@ -458,6 +461,79 @@ def test_current_rate_token_alone_leaves_supported_rates_none() -> None:
     info = DeviceInfoCollector(runner).sample()
     assert info.refresh_rate_hz == pytest.approx(60.0)  # current rate intact
     assert info.supported_refresh_rates_hz is None  # no advertised modes
+
+
+# ---------------------------------------------------------------------------
+# Phase 2D: battery & storage intelligence
+# ---------------------------------------------------------------------------
+
+
+def test_battery_static_facts_unavailable_degrades() -> None:
+    runner = fx.DeviceRunner(
+        fx.failing_commands(
+            fx.scenario("normal"),
+            [
+                "cat /sys/class/power_supply/battery/charge_full_design",
+                "cat /sys/class/power_supply/battery/cycle_count",
+            ],
+        )
+    )
+    info = DeviceInfoCollector(runner).sample()
+    assert info.battery_design_capacity is None
+    assert info.battery_cycle_count is None
+    assert info.manufacturer == "vivo"
+    assert info.storage is not None
+
+
+def test_partial_battery_static_facts_degrades_field_by_field() -> None:
+    runner = fx.DeviceRunner(
+        {
+            **fx.scenario("normal"),
+            "cat /sys/class/power_supply/battery/charge_full_design": "0\n",
+            "cat /sys/class/power_supply/battery/cycle_count": "0\n",
+        }
+    )
+    info = DeviceInfoCollector(runner).sample()
+    assert info.battery_design_capacity is None  # zero capacity invalid
+    assert info.battery_cycle_count == 0  # new battery, valid
+
+
+def test_storage_filesystem_unavailable_degrades() -> None:
+    runner = fx.DeviceRunner({**fx.scenario("normal"), "cat /proc/mounts": "FAILURE"})
+    info = DeviceInfoCollector(runner).sample()
+    assert info.storage_filesystem is None
+    assert info.storage is not None  # df-based volume intact
+    assert info.model == "V2026"
+
+
+def test_storage_filesystem_missing_mount_is_none() -> None:
+    runner = fx.DeviceRunner(
+        {**fx.scenario("normal"), "cat /proc/mounts": "rootfs / rootfs rw 0 0\n"}
+    )
+    info = DeviceInfoCollector(runner).sample()
+    assert info.storage_filesystem is None
+    assert info.storage is not None
+
+
+def test_battery_and_storage_facts_failure_keeps_snapshot() -> None:
+    runner = fx.DeviceRunner(
+        fx.failing_commands(
+            fx.scenario("normal"),
+            [
+                "cat /sys/class/power_supply/battery/charge_full_design",
+                "cat /sys/class/power_supply/battery/cycle_count",
+                "cat /proc/mounts",
+            ],
+        )
+    )
+    info = DeviceInfoCollector(runner).sample()
+    assert info.battery_design_capacity is None
+    assert info.battery_cycle_count is None
+    assert info.storage_filesystem is None
+    assert info.manufacturer == "vivo"
+    assert info.model == "V2026"
+    assert info.storage is not None
+    assert info.gpu_vendor == "Qualcomm"
 
 
 def test_identifiers_unavailable_degrades() -> None:

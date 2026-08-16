@@ -17,12 +17,14 @@ from android_task_manager.device.parser import (
     derive_cpu_64bit,
     khz_to_hz,
     parse_android_id,
+    parse_charge_full_design,
     parse_cpu_features,
     parse_cpu_hardware_line,
     parse_cpu_range,
     parse_cpufreq_khz,
     parse_cpuinfo_cores,
     parse_cpuinfo_model_name,
+    parse_cycle_count,
     parse_df_k,
     parse_epoch_seconds,
     parse_getprop_output,
@@ -30,6 +32,7 @@ from android_task_manager.device.parser import (
     parse_gpu_gles,
     parse_mac_address,
     parse_max_frequency_khz,
+    parse_mounts_filesystem,
     parse_orientation,
     parse_orientation_degrees,
     parse_proc_uptime,
@@ -320,6 +323,57 @@ def test_gpu_gles_missing_or_empty_is_none() -> None:
     assert parse_gpu_gles("Display 0 HWC layers: 2\n") == (None, None)
     assert parse_gpu_gles("GLES:\n") == (None, None)
     assert parse_gpu_gles("") == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# Battery static facts / storage filesystem
+# ---------------------------------------------------------------------------
+
+
+def test_charge_full_design_parses_positive_int() -> None:
+    assert parse_charge_full_design("4880000\n") == 4880000
+
+
+def test_charge_full_design_invalid_is_none() -> None:
+    assert parse_charge_full_design("0\n") is None
+    assert parse_charge_full_design("-100\n") is None
+    assert parse_charge_full_design("lots\n") is None
+    assert parse_charge_full_design("") is None
+
+
+def test_cycle_count_parses_non_negative_int() -> None:
+    assert parse_cycle_count("412\n") == 412
+    assert parse_cycle_count("0\n") == 0  # a new battery
+
+
+def test_cycle_count_invalid_is_none() -> None:
+    assert parse_cycle_count("-1\n") is None
+    assert parse_cycle_count("many\n") is None
+    assert parse_cycle_count("") is None
+
+
+def test_mounts_filesystem_found_for_data() -> None:
+    text = "rootfs / rootfs rw 0 0\n/dev/block/dm-5 /data ext4 rw,seclabel,nosuid 0 0\n"
+    assert parse_mounts_filesystem(text, ("/data", "/data/user/0")) == "ext4"
+
+
+def test_mounts_filesystem_accepts_fbe_user_view() -> None:
+    text = "/dev/block/dm-5 /data/user/0 f2fs rw 0 0\n"
+    assert parse_mounts_filesystem(text, ("/data", "/data/user/0")) == "f2fs"
+
+
+def test_mounts_filesystem_first_matching_line_wins() -> None:
+    text = (
+        "/dev/block/dm-5 /data/user/0 f2fs rw 0 0\n"
+        "/dev/block/dm-5 /data ext4 rw 0 0\n"
+    )
+    assert parse_mounts_filesystem(text, ("/data", "/data/user/0")) == "f2fs"
+
+
+def test_mounts_filesystem_missing_is_none() -> None:
+    text = "rootfs / rootfs rw 0 0\n/dev/block/dm-0 /system ext4 ro 0 0\n"
+    assert parse_mounts_filesystem(text, ("/data", "/data/user/0")) is None
+    assert parse_mounts_filesystem("", ("/data",)) is None
 
 
 # ---------------------------------------------------------------------------

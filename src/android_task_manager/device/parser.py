@@ -273,6 +273,61 @@ def parse_gpu_gles(text: str) -> tuple[str | None, str | None]:
     return (None, None)
 
 
+# ---------------------------------------------------------------------------
+# Battery static facts / storage filesystem
+# ---------------------------------------------------------------------------
+
+
+def parse_charge_full_design(text: str) -> int | None:
+    """Design capacity (``charge_full_design``); positive int, else None.
+
+    The value is kept verbatim — the kernel convention is microamp-hours
+    but OEMs vary, so no unit conversion is claimed. Zero, negative and
+    malformed values -> None: a capacity of zero is not meaningful.
+    """
+    value = text.strip()
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def parse_cycle_count(text: str) -> int | None:
+    """Battery charge cycle count; non-negative int, else None.
+
+    Zero is a real value (a new battery), so it is preserved; only
+    negative or malformed values are rejected.
+    """
+    value = text.strip()
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    if parsed < 0:
+        return None
+    return parsed
+
+
+def parse_mounts_filesystem(text: str, mounts: tuple[str, ...]) -> str | None:
+    """Filesystem type of the first matching mount in ``/proc/mounts``.
+
+    Each line is ``device mountpoint type options dump pass``; the kernel
+    escapes spaces in paths, so whitespace splitting is safe. The first
+    line whose mount point is in ``mounts`` wins; no match -> None.
+    """
+    for raw in text.splitlines():
+        parts = raw.split()
+        if len(parts) < 3:
+            continue
+        if parts[1] in mounts:
+            value = parts[2].strip()
+            return value or None
+    return None
+
+
 def parse_mac_address(text: str) -> str | None:
     """A real MAC address, or None (placeholder/malformed values excluded).
 

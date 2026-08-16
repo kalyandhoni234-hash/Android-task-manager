@@ -372,7 +372,7 @@ Both builds embed the product icon (`packaging/assets/atm.ico`) and a Windows ve
 
 Every release publishes its executables **together with `SHA256SUMS.txt`**, and the product website shows the checksum of the exact published EXE — so you can verify what you downloaded. Release pages: <https://github.com/kalyandhoni234-hash/Android-task-manager/releases>
 
-> **Version note:** `v0.4.4` is an **internal development checkpoint** (Phase 1 — diagnostics, ADB reliability, worker observability, engineering quality; Phase 2A — device information architecture; Phase 2B — CPU & hardware intelligence: architecture, ABI, core topology, governor, frequencies, instruction-set features; Phase 2C — GPU & display intelligence: GPU vendor/model from SurfaceFlinger, typed display dimensions, density/resolution overrides, numeric orientation, supported refresh rates). No release was published for it; the next public release is **v0.5.0**.
+> **Version note:** `v0.4.5` is an **internal development checkpoint** (Phase 1 — diagnostics, ADB reliability, worker observability, engineering quality; Phase 2A — device information architecture; Phase 2B — CPU & hardware intelligence; Phase 2C — GPU & display intelligence; Phase 2D — battery & storage intelligence: static battery facts (design capacity, cycle count) and the internal-volume filesystem type; dynamic battery data stays with the live battery monitor). No release was published for it; the next public release is **v0.5.0**.
 
 ## 🌐 Product Website
 
