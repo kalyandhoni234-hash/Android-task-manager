@@ -191,10 +191,14 @@ class ConnectionManager:
                 # On Windows every adb call would otherwise flash a console
                 # window (adb.exe is a console-subsystem binary and the
                 # packaged GUI parent is a GUI-subsystem process). The flag is
-                # ignored on POSIX, where adb has no console concept.
-                creationflags=subprocess.CREATE_NO_WINDOW
-                if sys.platform == "win32"
-                else 0,
+                # ignored on POSIX, where adb has no console concept. It is
+                # resolved via getattr so non-Windows type stubs (mypy in CI)
+                # accept the reference; the runtime value is 0 off Windows.
+                creationflags=(
+                    getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    if sys.platform == "win32"
+                    else 0
+                ),
             )
         except FileNotFoundError as exc:
             raise ADBNotFoundError(
