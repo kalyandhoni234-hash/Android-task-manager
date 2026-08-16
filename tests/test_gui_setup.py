@@ -22,8 +22,8 @@ from android_task_manager import __version__
 from android_task_manager.adb.exceptions import (
     ADBAmbiguousDeviceError,
     ADBDisconnectedError,
-    ADBNotFoundError,
     ADBNoDeviceError,
+    ADBNotFoundError,
     ADBTimeoutError,
     ADBUnauthorizedError,
 )
@@ -278,7 +278,9 @@ def test_worker_connect_maps_every_user_state(qtapp) -> None:
         connection.connect_fail = failure
         worker = MonitorWorker(connection=connection)
         states: list = []
-        worker.connection_changed.connect(lambda state, detail: states.append((state, detail)))
+        worker.connection_changed.connect(
+            lambda state, detail, sink=states: sink.append((state, detail))
+        )
         worker.retry()
         assert states and states[-1][0] is expected, f"{failure!r} -> {states}"
 

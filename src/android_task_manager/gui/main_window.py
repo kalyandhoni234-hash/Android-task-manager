@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -51,6 +51,7 @@ from ..process.models import ProcessSnapshot
 from ..updater import UpdateCheckResult
 from .connection_strip import ConnectionStrip
 from .device_page import DevicePage
+from .diagnostics_dialog import DiagnosticsDialog
 from .findings_page import FindingsPage
 from .incident_dialog import IncidentDialog
 from .investigation_dialog import InvestigationDialog
@@ -187,6 +188,7 @@ class MainWindow(QMainWindow):
         self._investigation_dialog: InvestigationDialog | None = None
         self._process_tree_dialog: ProcessTreeDialog | None = None
         self._why_dialog: WhyFlaggedDialog | None = None
+        self._diagnostics_dialog: DiagnosticsDialog | None = None
 
         self.processes.inspection_requested.connect(self.inspect_requested.emit)
         self.processes.inspector.action_requested.connect(self._on_action_clicked)
@@ -206,6 +208,7 @@ class MainWindow(QMainWindow):
         # -- Application shell: sidebar + pages ------------------------------
         self.sidebar = Sidebar()
         self.sidebar.page_requested.connect(self._on_page_requested)
+        self.sidebar.diagnostics_requested.connect(self._on_diagnostics_requested)
         self.connection_strip = ConnectionStrip()
 
         self.overview = OverviewPage()
@@ -287,6 +290,15 @@ class MainWindow(QMainWindow):
         self.sidebar.set_active(key)
         self._pages.setCurrentIndex(index)
 
+    def _on_diagnostics_requested(self) -> None:
+        """Open (or refresh) the local diagnostics dialog."""
+        if self._diagnostics_dialog is None:
+            self._diagnostics_dialog = DiagnosticsDialog(self)
+        self._diagnostics_dialog.refresh()
+        self._diagnostics_dialog.show()
+        self._diagnostics_dialog.raise_()
+        self._diagnostics_dialog.activateWindow()
+
     # ------------------------------------------------------------------
     # Overview / findings refresh (presentation only)
     # ------------------------------------------------------------------
@@ -354,14 +366,21 @@ class MainWindow(QMainWindow):
 
     def update_snapshots(
         self,
-        cpu: CPUSnapshot,
+        cpu: CPUSnapshot | None,
         memory: MemorySnapshot | None,
         processes: ProcessSnapshot | None,
         battery: BatterySnapshot | None,
         network: NetworkSnapshot | None,
     ) -> None:
+        """Adopt the monitor's latest snapshots.
+
+        The monitor publishes an all-``None`` snapshot when the device is
+        lost, so the GUI thread must tolerate it (and mirror the cleared
+        state) instead of crashing on a stale-cache render.
+        """
         self._latest_cpu = cpu
-        self.cpu.set_snapshot(cpu)
+        if cpu is not None:
+            self.cpu.set_snapshot(cpu)
         if memory is not None:
             self._latest_memory = memory
             self.memory.set_snapshot(memory)
@@ -413,8 +432,15 @@ class MainWindow(QMainWindow):
         if state is ConnectionState.CONNECTED:
             self._stack.setCurrentIndex(1)
         else:
-            # No device: stale identity facts must never linger on the page.
+            # No device: stale identity facts and telemetry must never
+            # linger on the pages — clear the mirrors the overview and the
+            # device page render from.
             self.device_information = None
+            self._latest_cpu = None
+            self._latest_memory = None
+            self._latest_battery = None
+            self._latest_processes = None
+            self._latest_network_investigation = None
             self._stack.setCurrentIndex(0)
             self.setup.show_state(state, detail)
         self._refresh_overview()

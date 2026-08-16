@@ -21,9 +21,6 @@ from android_task_manager.investigation.completeness import (
     socket_table_completeness,
 )
 from android_task_manager.investigation.models import (
-    STABILITY_MEANINGFUL,
-    STABILITY_TRANSIENT,
-    STABILITY_UNCERTAIN,
     ObservationState,
     SnapshotCompleteness,
 )
@@ -35,7 +32,6 @@ from android_task_manager.investigation.stability import (
 )
 from android_task_manager.process.models import ProcessCategory
 from tests import investigation_fixtures as fx
-
 
 # ---------------------------------------------------------------------------
 # Completeness mapping

@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 import pytest
 
 from android_task_manager.adb.exceptions import ADBTimeoutError
-from android_task_manager.permissions import PermissionCollector, parse_dumpsys_package
+from android_task_manager.permissions import PermissionCollector
 from android_task_manager.permissions.models import PERMISSION_INSTALL
 
 PACKAGE_DUMP = """Package [com.example.app] (4f9a2c1):

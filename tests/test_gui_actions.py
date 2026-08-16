@@ -23,7 +23,6 @@ from android_task_manager.gui.monitor import MonitorWorker
 from android_task_manager.gui.widgets.process_inspector_widget import (
     ProcessInspectorWidget,
 )
-from android_task_manager.gui.widgets.process_widget import ProcessWidget
 from android_task_manager.process.inspector_models import ProcessInspectionSnapshot
 
 

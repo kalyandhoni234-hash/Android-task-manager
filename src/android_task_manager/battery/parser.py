@@ -10,9 +10,7 @@ normalized with documented mappings.
 from __future__ import annotations
 
 from .models import (
-    BatteryHealth,
     BatterySnapshot,
-    BatteryStatus,
     battery_health_from_raw,
     battery_status_from_raw,
 )

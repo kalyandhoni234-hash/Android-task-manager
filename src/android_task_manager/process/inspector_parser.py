@@ -132,7 +132,6 @@ def parse_stat(text: str) -> StatFields:
     name = text[open_idx + 1 : close_idx]
     tail = text[close_idx + 1 :].split()
     # pid comes from the prefix before '(' (or is recorded by the caller).
-    fields: dict[str, int | None] = {}
 
     def field_at(index: int):
         try:

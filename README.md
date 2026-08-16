@@ -95,6 +95,14 @@ Monitoring is **read-only**. The tool never writes to the device; the three devi
 - A **connection-setup screen** (GUI) that guides through every failure state — ADB not found, no device, not authorized, offline, multiple devices — **auto-retries** every couple of seconds and recovers live (plugging in, authorizing or locating adb mid-session works without restart).
 - Explicit device selection for multi-device setups (`--device` / device picker).
 - Every ADB command runs through one `ConnectionManager` with a per-command timeout and clean, typed error states.
+- **Loss of device mid-session is handled explicitly**: a disconnected/offline/unauthorized device immediately invalidates every cached telemetry snapshot (stale data is never presented as current), publishes an unambiguous empty state, and the pipeline re-connects from scratch on the next retry — hot-plugging works without restarting the app.
+
+### 🩺 Diagnostics & Observability
+
+- **Local-only diagnostic logging.** The app writes a rotating log (512 KiB per file, 3 backups) to `%LOCALAPPDATA%\AndroidTaskManager\logs` on Windows (`~/.local/share/android-task-manager/logs` elsewhere; override with the `ATMAN_LOG_DIR` environment variable — tests use this). Nothing is ever uploaded; there is no telemetry.
+- **Sensitive-information redaction.** Every formatted log line is scrubbed: device serials are registered as secrets automatically at discovery time, and common credential shapes (password/token/API-key/`Bearer` tokens, GitHub/Slack/OpenAI-style tokens, MAC addresses) are masked before anything reaches disk.
+- **Worker error observability.** Unexpected worker failures (baseline save/check/export, device actions, permission audits, process inspection, update checks, incident export, the monitor pipeline) never crash the GUI: they report through the regular failure signals *and* write their full traceback to the diagnostic log. Expected, typed failures (e.g. device disconnected) are logged at WARNING without tracebacks.
+- **Diagnostics dialog** (sidebar → **Diagnostics**): shows the current log file, opens its folder in the system file manager, and exports a local diagnostic report (version, environment, recent log lines) to a destination you choose.
 
 ## 🖥️ Screenshots
 
@@ -149,7 +157,7 @@ The key architectural rule: **collectors never invoke `subprocess` directly.** A
 | Device bridge | ADB (`adb shell`) | not bundled (see [Why is ADB not bundled?](#why-is-adb-not-bundled)) |
 | Term renderer | custom, dependency-light | `terminal/renderer.py` |
 | Windows packaging | PyInstaller ≥ 6 | one-file windowed + debug builds |
-| Tests | pytest ≥ 7 | 893 tests, fixture-driven, GUI headless |
+| Tests | pytest ≥ 7 | 966 tests, fixture-driven, GUI headless |
 | CI/CD | GitHub Actions | Linux matrix (3.10–3.12) + Windows release build |
 | Product site | Next.js 16 (static export) | hosted on GitHub Pages |
 
@@ -175,13 +183,15 @@ android-task-manager/
 │   ├── investigation/                # investigation core: drift stability · timeline ·
 │   │                                 #   attribution · why-flagged evidence · process tree
 │   ├── action/                       # package verification + Open App / App Info / Force Stop
+│   ├── core/                         # diagnostics: rotating local log, redaction,
+│   │                                 #   failure helpers, diagnostic export
 │   ├── terminal/                     # dependency-light text renderer
 │   ├── gui/                          # PySide6 dashboard: sidebar navigation, overview,
 │   │                                 #   device-info & findings pages, widgets/, workers
 │   │                                 #   (incl. incident export worker + PDF writer),
 │   │                                 #   styles, setup panel, entry point (app.py -> main)
 │   └── main.py                       # terminal entry point / sample loop
-├── tests/                            # 893 pytest tests (44 modules), fixed-device fixtures
+├── tests/                            # 966 pytest tests (49 modules), fixed-device fixtures
 ├── packaging/                        # build_windows.ps1, icon + version-resource assets,
 │   │                                 #   entry stubs (entry_gui.py / entry_console.py)
 ├── docs/                             # ADRs (incident reporting, investigation core) +
@@ -306,11 +316,23 @@ Device facts come from standard Android system properties and read-only commands
 python -m pytest
 ```
 
-The suite: **897 tests across 44 modules** (`tests/`), covering the parsers (CPU, memory, process, battery, network), delta calculations, collectors, the ADB discovery/connection layers, the package-identity resolver/service, the network investigation, the incident report layer (builder, JSON/HTML renderers, GUI panel/dialog/worker), the investigation core (drift stability, timeline, attribution, why-flagged evidence, process tree), device information (getprop/wm/df parsing, collector, Device page), the GUI (widgets, sidebar navigation, overview/findings/device pages, setup flow, actions, workers).
+The suite: **966 tests across 49 modules** (`tests/`), covering the parsers (CPU, memory, process, battery, network), delta calculations, collectors, the ADB discovery/connection layers, the package-identity resolver/service, the network investigation, the incident report layer (builder, JSON/HTML renderers, GUI panel/dialog/worker), the investigation core (drift stability, timeline, attribution, why-flagged evidence, process tree), device information (getprop/wm/df parsing, collector, Device page), the GUI (widgets, sidebar navigation, overview/findings/device pages, setup flow, actions, workers), and the Phase-1 reliability layer (diagnostics core and redaction, ADB device-loss mapping and reconnect behavior, monitor stale-data invalidation, worker error observability, the Diagnostics dialog).
 
 - Runs entirely against **fixed fixtures based on verified Vivo V2026 output — no physical device required**.
 - **GUI tests run headlessly** via Qt's `offscreen` platform plugin (`QT_QPA_PLATFORM=offscreen`): they construct widgets, deliver snapshots, drive the monitor worker, and cover the first-run setup flow (each connection state, the multi-device picker, ADB discovery) without a display.
 - **Live Android-device testing is separate from CI**: USB disconnect/reconnect, authorization and long-run stability checks are performed manually on real hardware and are intentionally not part of the automated suite.
+
+### Quality checks
+
+Phase 1 adds three automated checks (also enforced in CI):
+
+```bash
+python -m ruff check src tests        # lint (E4/E7/E9, F, I, B)
+python -m mypy src/android_task_manager/core src/android_task_manager/adb  # type check (enforced scope)
+python -m pip_audit                   # dependency vulnerability audit
+```
+
+The mypy scope is the pure core + ADB layer; the GUI layer carries pre-existing PySide6 typing debt that is tracked for later phases. `pip-audit` needs the installed environment (`pip install -e ".[dev]"`).
 
 ## CI/CD
 
@@ -320,7 +342,7 @@ Three workflows in `.github/workflows/`:
 
 | Workflow | Trigger | What it does |
 | --- | --- | --- |
-| `ci.yml` | push / PR | Full test suite on **Python 3.10 / 3.11 / 3.12** (headless Qt), `python -m build` package check, plus a website job (Next.js lint + static export under Node 22). |
+| `ci.yml` | push / PR | Full test suite on **Python 3.10 / 3.11 / 3.12** (headless Qt), `python -m build` package check, **lint** (`ruff`), **typecheck** (`mypy` on `core` + `adb`), **dependency audit** (`pip-audit`), plus a website job (Next.js lint + static export under Node 22). |
 | `release.yml` | tag `v*` | On **Windows**, runs `packaging/build_windows.ps1`, generates `SHA256SUMS.txt`, and publishes `AndroidTaskManager.exe`, `AndroidTaskManager-debug.exe` and the checksums to a GitHub Release (`softprops/action-gh-release`). |
 | `deploy-pages.yml` | push to `master` (website paths) / manual | Builds the Next.js static export and deploys it to GitHub Pages. Note: repo settings must use **Source: GitHub Actions**. |
 
@@ -349,6 +371,8 @@ Both builds embed the product icon (`packaging/assets/atm.ico`) and a Windows ve
 | [v0.1.0](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/tag/v0.1.0) | earlier build |
 
 Every release publishes its executables **together with `SHA256SUMS.txt`**, and the product website shows the checksum of the exact published EXE — so you can verify what you downloaded. Release pages: <https://github.com/kalyandhoni234-hash/Android-task-manager/releases>
+
+> **Version note:** `v0.4.4` is an **internal development checkpoint** (Phase 1 — diagnostics, ADB reliability, worker observability, engineering quality; Phase 2A — device information architecture; Phase 2B — CPU & hardware intelligence: architecture, ABI, core topology, governor, frequencies, instruction-set features; Phase 2C — GPU & display intelligence: GPU vendor/model from SurfaceFlinger, typed display dimensions, density/resolution overrides, numeric orientation, supported refresh rates). No release was published for it; the next public release is **v0.5.0**.
 
 ## 🌐 Product Website
 

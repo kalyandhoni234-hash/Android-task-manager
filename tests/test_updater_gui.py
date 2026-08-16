@@ -19,13 +19,12 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QMetaObject, QThread, Qt
+from PySide6.QtCore import QMetaObject, Qt, QThread
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from android_task_manager.gui.update_banner import UpdateBanner
 from android_task_manager.gui.update_worker import UpdateWorker
 from android_task_manager.updater import UpdateCheckResult
-
 from android_task_manager.updater import check as check_module
 
 _AT = datetime(2026, 8, 15, 12, 0, 0, tzinfo=timezone.utc)

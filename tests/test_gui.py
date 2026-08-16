@@ -29,20 +29,20 @@ from android_task_manager.adb.exceptions import (
 )
 from android_task_manager.battery.models import BatteryHealth, BatterySnapshot, BatteryStatus
 from android_task_manager.cpu.models import CPUCore, CPUSnapshot
-from android_task_manager.gui.main_window import MainWindow, wire, wire_inspector
-from android_task_manager.gui.interface_classifier import classify_interface
 from android_task_manager.gui.inspector_worker import ProcessInspectionWorker
+from android_task_manager.gui.interface_classifier import classify_interface
+from android_task_manager.gui.main_window import MainWindow, wire, wire_inspector
 from android_task_manager.gui.monitor import ConnectionState, MonitorWorker
 from android_task_manager.gui.styles import DARK_STYLE
-from android_task_manager.gui.widgets.battery_widget import BatteryWidget
 from android_task_manager.gui.widgets.battery_history import BatteryHistoryWidget
+from android_task_manager.gui.widgets.battery_widget import BatteryWidget
 from android_task_manager.gui.widgets.cpu_history import CPUHistoryWidget
 from android_task_manager.gui.widgets.cpu_widget import CPUWidget
 from android_task_manager.gui.widgets.device_widget import DeviceWidget
-from android_task_manager.gui.widgets.memory_widget import MemoryWidget
 from android_task_manager.gui.widgets.memory_history import MemoryHistoryWidget
-from android_task_manager.gui.widgets.network_widget import NetworkWidget
+from android_task_manager.gui.widgets.memory_widget import MemoryWidget
 from android_task_manager.gui.widgets.network_history import NetworkHistoryWidget
+from android_task_manager.gui.widgets.network_widget import NetworkWidget
 from android_task_manager.gui.widgets.process_widget import ProcessWidget
 from android_task_manager.memory.models import MemorySnapshot
 from android_task_manager.network.models import (
@@ -269,7 +269,7 @@ def _device_responses() -> dict[str, str]:
 
 
 def test_gui_imports() -> None:
-    from android_task_manager.gui import app, main_window, monitor, styles
+    from android_task_manager.gui import app, main_window, monitor
     from android_task_manager.gui import widgets as widgets
 
     assert widgets.panel is not None
@@ -290,7 +290,7 @@ def test_cpu_widget_receives_snapshot(qtapp) -> None:
     widget.set_snapshot(cpu_snapshot())
     assert widget._overall.text() == "12.4%"
     labels = {}
-    for label, bar, pct, freq in widget._core_rows:
+    for label, _bar, pct, freq in widget._core_rows:
         labels[label.text()] = (pct.text(), freq.text())
     assert labels["Core 0"] == ("12.0%", "1.75 GHz")
     assert labels["Core 1"] == ("N/A", "N/A")

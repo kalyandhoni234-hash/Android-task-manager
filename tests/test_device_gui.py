@@ -24,13 +24,12 @@ from android_task_manager.battery.models import (
     BatteryStatus,
 )
 from android_task_manager.cpu.models import CPUCore, CPUSnapshot
-from android_task_manager.device.models import DeviceInformation, StorageInfo
+from android_task_manager.device.models import DeviceInformation
 from android_task_manager.gui.device_page import DevicePage
 from android_task_manager.gui.main_window import MainWindow
 from android_task_manager.gui.monitor import ConnectionState
 from android_task_manager.gui.widgets.device_widget import DeviceWidget
 from android_task_manager.memory.models import MemorySnapshot
-
 from tests import device_fixtures as fx
 
 

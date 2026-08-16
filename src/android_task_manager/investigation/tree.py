@@ -19,7 +19,7 @@ network connection means "review required", not "malicious").
 
 from __future__ import annotations
 
-from ..process.models import ProcessCategory, ProcessSnapshot
+from ..process.models import ProcessSnapshot
 from .models import ProcessNode, ProcessTree
 
 

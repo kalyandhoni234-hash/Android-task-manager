@@ -15,9 +15,10 @@ import os
 import sys
 from typing import Sequence
 
+from .. import __version__
 from ..adb.connection import ConnectionManager
 from ..adb.discovery import find_adb, is_usable_adb, version_validator
-from .. import __version__
+from ..core.diagnostics import setup_logging
 
 _DEFAULT_INTERVAL = 2.0
 _DEFAULT_MEMORY_INTERVAL = 10.0
@@ -91,6 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     # Parse before importing PySide6 so `--help` works without the GUI extra.
     args = build_parser().parse_args(argv)
+    setup_logging()
 
     try:
         from PySide6.QtCore import QThread
@@ -100,9 +102,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .baseline_worker import BaselineWorker
         from .incident_worker import IncidentWorker
         from .inspector_worker import ProcessInspectionWorker
-        from .permission_worker import PermissionWorker
-        from .update_worker import UpdateWorker
-
         from .main_window import (
             MainWindow,
             wire,
@@ -114,7 +113,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             wire_updates,
         )
         from .monitor import MonitorWorker
+        from .permission_worker import PermissionWorker
         from .styles import DARK_STYLE
+        from .update_worker import UpdateWorker
     except ImportError:
         print(
             "The GUI requires PySide6. Install it with:\n"

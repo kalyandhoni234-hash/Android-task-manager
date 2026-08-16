@@ -30,9 +30,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from ..baseline.models import CHANGE_NEW, CHANGE_REMOVED
 from ..process.models import ProcessCategory
+
+if TYPE_CHECKING:
+    from ..baseline.models import DriftEvent, PackageIdentity, ProcessRef, SocketIdentity
+    from ..heuristics.models import SuspiciousSignal
 
 # ---------------------------------------------------------------------------
 # Snapshot completeness

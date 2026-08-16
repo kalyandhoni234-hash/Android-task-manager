@@ -11,6 +11,7 @@ from .adb.connection import ConnectionManager
 from .adb.discovery import find_adb, version_validator
 from .adb.exceptions import ADBAmbiguousDeviceError, ADBError
 from .battery.collector import BatteryCollector
+from .core.diagnostics import setup_logging
 from .cpu.collector import CPUCollector
 from .memory.collector import MemoryCollector
 from .network.collector import NetworkCollector
@@ -100,6 +101,7 @@ def _device_label(connection: ConnectionManager, serial: str) -> tuple[str, str]
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    setup_logging()
 
     try:
         connection = ConnectionManager(

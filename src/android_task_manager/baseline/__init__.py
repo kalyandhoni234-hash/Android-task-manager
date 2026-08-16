@@ -11,7 +11,6 @@ not-yet-built features.
 """
 
 from .diff import diff_snapshot
-from .matching import new_process_refs, new_socket_identities
 from .export import (
     Session,
     drift_event_from_dict,
@@ -28,6 +27,7 @@ from .export import (
     write_drift_events_csv,
     write_session_json,
 )
+from .matching import new_process_refs, new_socket_identities
 from .models import (
     CATEGORY_PACKAGE,
     CATEGORY_PROCESS,

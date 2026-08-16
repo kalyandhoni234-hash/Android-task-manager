@@ -35,6 +35,8 @@ class Sidebar(QWidget):
 
     #: (page key) the user asked to navigate to a page.
     page_requested = Signal(str)
+    #: The user asked to open the diagnostics dialog (not a page).
+    diagnostics_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -73,6 +75,21 @@ class Sidebar(QWidget):
                 layout.addWidget(button)
             layout.addSpacing(8)
         layout.addStretch(1)
+
+        # Diagnostics is an action, not a page: it stays outside the page
+        # button group so it can never be the "active page".
+        system_label = QLabel("SYSTEM")
+        system_label.setObjectName("navSection")
+        system_label.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(system_label)
+        layout.addSpacing(2)
+        self.diagnostics_button = QPushButton("Diagnostics")
+        self.diagnostics_button.setObjectName("navButton")
+        self.diagnostics_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.diagnostics_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.diagnostics_button.setAccessibleName("Diagnostics")
+        self.diagnostics_button.clicked.connect(self.diagnostics_requested.emit)
+        layout.addWidget(self.diagnostics_button)
 
     def _on_clicked(self, key: str) -> None:
         self.set_active(key)

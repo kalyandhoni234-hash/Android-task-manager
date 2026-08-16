@@ -180,7 +180,6 @@ def test_rendering_sorts_processes_by_cpu_descending() -> None:
         ProcessInfo(pid=4, name="d", uid=1, state="S", cpu_percent=0.0, memory_percent=1.0, category=ProcessCategory.USER),
     ]
     lines = _process_lines(_snapshot(processes))
-    rows = [line for line in lines if " % " in line or line.split() and line.split()[0].isdigit()]
     # Recover row order from the rendered lines: cpu descending, None last.
     pids_in_rows = []
     for line in lines:

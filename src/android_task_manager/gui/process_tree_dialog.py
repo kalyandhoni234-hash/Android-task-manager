@@ -20,8 +20,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from ..network_investigation.models import NetworkInvestigationSnapshot
 from ..investigation.models import ProcessNode, ProcessTree
+from ..network_investigation.models import NetworkInvestigationSnapshot
 
 
 class ProcessTreeDialog(QDialog):

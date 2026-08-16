@@ -9,6 +9,7 @@ rest of the device page.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 
 from .models import StorageInfo
 
@@ -63,6 +64,72 @@ def parse_wm_density(text: str) -> int | None:
                 return int(value)
             except ValueError:
                 return None
+    return None
+
+
+def _parse_dimensions(value: str) -> tuple[int, int] | None:
+    """``"WxH"`` with two positive integers -> (W, H), else None."""
+    if not value or "x" not in value:
+        return None
+    parts = value.split("x")
+    if len(parts) != 2:
+        return None
+    try:
+        width, height = int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return (width, height)
+
+
+def parse_wm_size_dimensions(text: str) -> tuple[int, int] | None:
+    """Physical screen size as (width, height) pixels from ``wm size``.
+
+    The physical size describes the actual panel and wins over an override,
+    mirroring ``parse_wm_size``. Dimensions must be positive integers;
+    anything else -> None.
+    """
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("Physical size:"):
+            return _parse_dimensions(line[len("Physical size:") :].strip())
+    return None
+
+
+def parse_wm_override_size(text: str) -> str | None:
+    """The ``wm size`` override ("WxH") when one is set; else None.
+
+    Android prints ``Override size: null`` when no override is configured;
+    only a well-formed ``WxH`` value is reported.
+    """
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("Override size:"):
+            value = line[len("Override size:") :].strip()
+            if value.lower() == "null":
+                return None
+            return value if _parse_dimensions(value) is not None else None
+    return None
+
+
+def parse_wm_override_density(text: str) -> int | None:
+    """The ``wm density`` override in dpi when one is set; else None.
+
+    ``Override density: null`` (no override configured) and non-positive or
+    malformed values -> None.
+    """
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("Override density:"):
+            value = line[len("Override density:") :].strip()
+            if value.lower() == "null":
+                return None
+            try:
+                parsed = int(value)
+            except ValueError:
+                return None
+            return parsed if parsed > 0 else None
     return None
 
 
@@ -136,6 +203,24 @@ def parse_refresh_rate(text: str) -> float | None:
     return None
 
 
+def parse_supported_refresh_rates(text: str) -> tuple[float, ...] | None:
+    """Distinct refresh rates (Hz) advertised by ``dumpsys display``.
+
+    Display-mode entries carry a ``refreshRate=<Hz>`` token; every distinct
+    positive value is collected (non-numeric, zero and negative tokens are
+    ignored) and returned sorted ascending. No usable token -> None.
+    """
+    rates: set[float] = set()
+    for match in re.finditer(r"refreshRate=([0-9.]+)", text):
+        try:
+            value = float(match.group(1))
+        except ValueError:
+            continue
+        if value > 0:
+            rates.add(value)
+    return tuple(sorted(rates)) or None
+
+
 def parse_orientation(text: str) -> str | None:
     """Surface orientation from ``dumpsys input`` (SurfaceOrientation: N)."""
     match = re.search(r"SurfaceOrientation:\s*([0-3])", text)
@@ -147,6 +232,45 @@ def parse_orientation(text: str) -> str | None:
         "2": "Reverse portrait",
         "3": "Reverse landscape",
     }.get(match.group(1))
+
+
+def parse_orientation_degrees(text: str) -> int | None:
+    """Surface orientation in degrees (0/90/180/270) from ``dumpsys input``.
+
+    ``SurfaceOrientation`` is a value 0-3 meaning 0/90/180/270 degrees of
+    rotation; values outside that range are malformed -> None.
+    """
+    match = re.search(r"SurfaceOrientation:\s*([0-3])", text)
+    if match is None:
+        return None
+    return {"0": 0, "1": 90, "2": 180, "3": 270}.get(match.group(1))
+
+
+# ---------------------------------------------------------------------------
+# GPU facts
+# ---------------------------------------------------------------------------
+
+
+def parse_gpu_gles(text: str) -> tuple[str | None, str | None]:
+    """GPU vendor/model from the ``dumpsys SurfaceFlinger`` GLES line.
+
+    The line reads ``GLES: <vendor>, <renderer>`` (e.g. "GLES: Qualcomm,
+    Adreno (TM) 610"). The first GLES line wins. A renderer without a
+    vendor prefix yields ``(None, renderer)``; an empty value yields
+    ``(None, None)``.
+    """
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line.startswith("GLES:"):
+            continue
+        rest = line[len("GLES:") :].strip()
+        if not rest:
+            return (None, None)
+        if "," in rest:
+            vendor, renderer = rest.split(",", 1)
+            return vendor.strip() or None, renderer.strip() or None
+        return None, rest
+    return (None, None)
 
 
 def parse_mac_address(text: str) -> str | None:
@@ -195,3 +319,208 @@ def _empty_to_none(value: str | None) -> str | None:
     if value is None or not value.strip():
         return None
     return value.strip()
+
+
+# ---------------------------------------------------------------------------
+# Kernel, uptime and boot-time facts
+# ---------------------------------------------------------------------------
+
+
+def parse_uname_a(text: str) -> str | None:
+    """The full kernel version line from ``uname -a`` (empty -> None).
+
+    The complete line carries the kernel release, build number, build date
+    and architecture; a multi-line response keeps only the first line.
+    """
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line:
+            return line
+    return None
+
+
+def parse_proc_uptime(text: str) -> float | None:
+    """Uptime in seconds: the first token of ``/proc/uptime``.
+
+    The file reports ``<uptime> <idle>`` as fractional seconds; the idle
+    token is ignored and negative/absent/malformed values become ``None``.
+    """
+    parts = text.strip().split()
+    if not parts:
+        return None
+    try:
+        value = float(parts[0])
+    except ValueError:
+        return None
+    if value < 0:
+        return None
+    return value
+
+
+def parse_epoch_seconds(text: str) -> int | None:
+    """An epoch-seconds value from ``date +%s`` (malformed -> None)."""
+    value = text.strip()
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def derive_boot_time(device_epoch: int, uptime_seconds: float) -> datetime | None:
+    """Boot time (UTC) derived as ``device clock − uptime``.
+
+    This is an estimate, never an authoritative value: it inherits the
+    device clock's accuracy and any clock drift. The derivation is only
+    produced when it is reliable — the uptime must be non-negative and the
+    device clock must not be behind the uptime — and is otherwise ``None``.
+    """
+    if uptime_seconds < 0 or device_epoch < uptime_seconds:
+        return None
+    return datetime.fromtimestamp(device_epoch - uptime_seconds, tz=timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# CPU architecture, topology and frequency facts
+# ---------------------------------------------------------------------------
+
+
+def parse_uname_a_machine(text: str) -> str | None:
+    """The machine token of ``uname -a`` (always the last token).
+
+    ``uname -a`` is ``kernel hostname release <version...> machine``; the
+    version portion may contain spaces, so only the trailing token is
+    reliable. Empty/malformed input -> None.
+    """
+    parts = text.strip().split()
+    return parts[-1] if parts else None
+
+
+#: Documented mapping from uname machine token to 64-bit capability.
+#: Tokens not listed (e.g. "armv8l", a 64-bit-capable core running a 32-bit
+#: kernel/userspace) yield None rather than a guess.
+_CPU_64BIT_MACHINES = frozenset({"aarch64", "arm64", "x86_64", "amd64"})
+_CPU_32BIT_MACHINES = frozenset(
+    {"armv7l", "armv6l", "armv5tejl", "i686", "i586", "i386"}
+)
+
+
+def derive_cpu_64bit(machine: str | None) -> bool | None:
+    """64-bit capability from a uname machine token; ambiguous -> None."""
+    if machine is None:
+        return None
+    if machine in _CPU_64BIT_MACHINES:
+        return True
+    if machine in _CPU_32BIT_MACHINES:
+        return False
+    return None
+
+
+def parse_cpu_range(text: str) -> int | None:
+    """Number of CPUs covered by a sysfs cpu-range file (online/present).
+
+    Handles ``"0-7"``, a bare ``"4"`` and comma lists such as
+    ``"0-3,8-11"``. Malformed, inverted or empty ranges -> None; a zero
+    total (no CPUs) is treated as invalid and returns None.
+    """
+    total = 0
+    for segment in text.strip().split(","):
+        segment = segment.strip()
+        if not segment:
+            return None
+        if "-" in segment:
+            bounds = segment.split("-")
+            if len(bounds) != 2:
+                return None
+            try:
+                start = int(bounds[0].strip())
+                end = int(bounds[1].strip())
+            except ValueError:
+                return None
+            if end < start:
+                return None
+            total += end - start + 1
+        else:
+            try:
+                value = int(segment)
+            except ValueError:
+                return None
+            if value < 0:
+                return None
+            total += 1
+    return total or None
+
+
+def parse_cpuinfo_cores(text: str) -> int | None:
+    """Logical core count from /proc/cpuinfo (``processor`` entries)."""
+    count = 0
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("processor") and ":" in line:
+            count += 1
+    return count or None
+
+
+def parse_cpufreq_khz(text: str) -> int | None:
+    """A cpufreq value in kHz (zero allowed; negative/malformed -> None).
+
+    Zero is a real kernel-reported value (e.g. a sleeping core), so it is
+    preserved; only negative or non-numeric values are rejected.
+    """
+    value = text.strip()
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    if parsed < 0:
+        return None
+    return parsed
+
+
+#: Canonical frequency unit for the CPU frequency model fields.
+_Hz_PER_KHZ = 1000.0
+
+
+def khz_to_hz(khz: int) -> float:
+    """Convert a kHz value to the canonical Hz unit (kHz * 1000)."""
+    return khz * _Hz_PER_KHZ
+
+
+def parse_governor(text: str) -> str | None:
+    """The CPU scaling governor name (empty/whitespace -> None)."""
+    value = text.strip()
+    return value or None
+
+
+#: ARM reports features on a ``Features`` line, x86 on a ``flags`` line.
+_CPU_FEATURE_LINE_KEYS = ("Features", "flags")
+
+
+def parse_cpu_features(text: str) -> tuple[str, ...] | None:
+    """Normalized CPU feature names from /proc/cpuinfo.
+
+    The first matching line (ARM ``Features:`` or x86 ``flags:``) is split,
+    lowercased and de-duplicated while preserving source order. No line,
+    an empty value, or an unrecognized key -> None.
+    """
+    for raw in text.splitlines():
+        line = raw.strip()
+        for key in _CPU_FEATURE_LINE_KEYS:
+            if line.startswith(key) and ":" in line:
+                tokens = line.split(":", 1)[1].split()
+                features: list[str] = []
+                for token in tokens:
+                    normalized = token.lower()
+                    if normalized not in features:
+                        features.append(normalized)
+                return tuple(features) or None
+    return None
+
+
+def parse_cpuinfo_model_name(text: str) -> str | None:
+    """The ``model name`` line of /proc/cpuinfo (empty/absent -> None)."""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("model name") and ":" in line:
+            value = line.split(":", 1)[1].strip()
+            return value or None
+    return None

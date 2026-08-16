@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+import android_task_manager.network.collector as network_collector
 from android_task_manager.adb.exceptions import ADBDisconnectedError, ADBTimeoutError
 from android_task_manager.network.calculation import (
     aggregate_interfaces,
@@ -16,8 +17,6 @@ from android_task_manager.network.calculation import (
     throughput_for,
 )
 from android_task_manager.network.collector import NetworkCollector
-import android_task_manager.network.collector as network_collector
-from android_task_manager.network.models import NetworkSnapshot
 from android_task_manager.network.parser import NetworkParseError, parse_proc_net_dev
 
 # ---------------------------------------------------------------------------

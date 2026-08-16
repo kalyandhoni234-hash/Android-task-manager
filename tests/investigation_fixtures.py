@@ -8,7 +8,7 @@ Session type the investigation aggregations consume.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 from android_task_manager.baseline.export import Session
 from android_task_manager.baseline.models import (
@@ -26,10 +26,19 @@ from android_task_manager.baseline.models import (
     SocketIdentity,
 )
 from android_task_manager.heuristics.models import (
-    SEVERITY_HIGH,
     SEVERITY_MEDIUM,
     HeuristicReport,
     SuspiciousSignal,
+)
+from android_task_manager.investigation.models import (
+    EVENT_BASELINE_CREATED,
+    EVENT_DRIFT_EVENT,
+    EVENT_SIGNAL_GENERATED,
+    EvidenceExplanation,
+    EvidenceFact,
+    InvestigationEvent,
+    Observation,
+    SnapshotCompleteness,
 )
 from android_task_manager.network_investigation.models import (
     NetworkInvestigationSnapshot,
@@ -39,16 +48,6 @@ from android_task_manager.process.models import (
     ProcessCategory,
     ProcessInfo,
     ProcessSnapshot,
-)
-from android_task_manager.investigation.models import (
-    EVENT_BASELINE_CREATED,
-    EVENT_DRIFT_EVENT,
-    EVENT_SIGNAL_GENERATED,
-    EvidenceExplanation,
-    EvidenceFact,
-    InvestigationEvent,
-    SnapshotCompleteness,
-    Observation,
 )
 
 

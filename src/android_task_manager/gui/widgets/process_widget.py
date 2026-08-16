@@ -25,7 +25,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QTableWidget,
     QTableWidgetItem,
-    QVBoxLayout,
     QWidget,
 )
 

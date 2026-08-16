@@ -195,7 +195,7 @@ class DevicePage(QWidget):
         """Re-render the page from one structured state bundle."""
         connected = state is ConnectionState.CONNECTED
         self._empty.setVisible(not connected)
-        for card_name, values in self._values.items():
+        for card_name in self._values:
             self._cards[card_name].setVisible(connected)
         self._summary_line.setVisible(connected)
         if not connected:

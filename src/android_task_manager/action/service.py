@@ -20,8 +20,8 @@ from ..adb.exceptions import (
     ADBCommandError,
     ADBDisconnectedError,
     ADBError,
-    ADBNotFoundError,
     ADBNoDeviceError,
+    ADBNotFoundError,
     ADBTimeoutError,
     ADBUnauthorizedError,
 )

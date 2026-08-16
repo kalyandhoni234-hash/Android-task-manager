@@ -13,6 +13,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, Slot
 
+from ..core.diagnostics import log_unexpected_failure
 from ..incident.renderers import write_html_report, write_json_report
 from .incident_pdf import write_incident_pdf
 
@@ -75,7 +76,8 @@ class IncidentWorker(QObject):
         except (OSError, ValueError) as exc:
             self.export_completed.emit(False, f"Export failed: {exc}")
             return
-        except Exception:  # noqa: BLE001 - a worker bug never freezes the GUI
+        except Exception as exc:  # noqa: BLE001 - a worker bug never freezes the GUI
+            log_unexpected_failure("incident", "export", exc)
             self.export_completed.emit(False, "The export failed unexpectedly.")
             return
         finally:

@@ -10,7 +10,6 @@ from __future__ import annotations
 from android_task_manager.baseline.models import (
     CATEGORY_PROCESS,
     CHANGE_NEW,
-    CHANGE_REMOVED,
 )
 from android_task_manager.investigation.models import (
     EVENT_BASELINE_CREATED,
@@ -18,7 +17,6 @@ from android_task_manager.investigation.models import (
     EVENT_DRIFT_EVENT,
     EVENT_HEURISTICS_EVALUATED,
     EVENT_NOT_OBSERVED,
-    EVENT_PERMISSION_AUDITED,
     EVENT_SIGNAL_GENERATED,
     EVENT_TRANSIENT_CHANGE,
     RELATION_OWNED_BY,

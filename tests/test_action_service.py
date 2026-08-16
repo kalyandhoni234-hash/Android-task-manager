@@ -14,8 +14,8 @@ from android_task_manager.action.service import (
 from android_task_manager.adb.exceptions import (
     ADBCommandError,
     ADBDisconnectedError,
-    ADBNotFoundError,
     ADBNoDeviceError,
+    ADBNotFoundError,
     ADBTimeoutError,
     ADBUnauthorizedError,
 )

@@ -1,0 +1,33 @@
+# Keep the Python dependency tree automatically up to date.
+#
+# Dependencies are declared in pyproject.toml ([project.optional-dependencies]
+# "dev" and "gui"); Dependabot raises pull requests when a new version of a
+# declared dependency is published, so CI (tests, lint, type check, audit)
+# re-validates each bump before it lands.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+
+  # GitHub Actions themselves are dependencies too (checkout, setup-python...).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+
+  # The product website's npm tree (Next.js static export).
+  - package-ecosystem: "npm"
+    directory: "/android-task-manager-website/website"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"

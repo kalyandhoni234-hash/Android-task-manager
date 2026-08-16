@@ -43,7 +43,6 @@ from collections import deque
 from collections.abc import Sequence
 
 from ..baseline.models import (
-    CATEGORY_PACKAGE,
     CATEGORY_PROCESS,
     CATEGORY_SOCKET,
     CHANGE_NEW,

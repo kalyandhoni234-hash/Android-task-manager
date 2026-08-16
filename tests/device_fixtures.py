@@ -90,6 +90,8 @@ def scenario(name: str) -> dict[str, str]:
             "dumpsys display": "FAILURE",
             "dumpsys input": "FAILURE",
         }
+    if name == "gpu_unavailable":
+        return {**base, "dumpsys SurfaceFlinger": "FAILURE"}
     if name == "identifiers_unavailable":
         return {
             **base,
@@ -155,6 +157,8 @@ def _normal() -> dict[str, str]:
             "[ro.build.id]: [RP1A.200720.012]\n"
             "[ro.build.display.id]: [PD2026F_EX_A_11_W_2021.06.01_15:40:47]\n"
             "[ro.build.fingerprint]: [vivo/PD2026F_EX_A/PD2026F:11/RP1A.200720.012/15.40.47:user/release-keys]\n"
+            "[ro.build.tags]: [release-keys]\n"
+            "[ro.build.type]: [user]\n"
             "[ro.boot.bootloader]: [UFS]\n"
             "[gsm.version.baseband]: [MPSS.JO.4.7.c2-00125-8937_GEN_PACK-1.10]\n"
             "[ro.product.cpu.abi]: [arm64-v8a]\n"
@@ -163,10 +167,38 @@ def _normal() -> dict[str, str]:
             "Usage: getprop [options]\n"
         ),
         "cat /proc/cpuinfo": (
+            "processor\t: 0\n"
             "Processor\t: AArch64 Processor rev 2 (aarch64)\n"
             "Hardware\t: Qualcomm Technologies, Inc SM8250\n"
+            "Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp\n"
+            "processor\t: 1\n"
+            "Processor\t: AArch64 Processor rev 2 (aarch64)\n"
+            "processor\t: 2\n"
+            "Processor\t: AArch64 Processor rev 2 (aarch64)\n"
+            "processor\t: 3\n"
+            "Processor\t: AArch64 Processor rev 2 (aarch64)\n"
+            "processor\t: 4\n"
+            "Processor\t: AArch64 Processor rev 2 (aarch64)\n"
+            "processor\t: 5\n"
+            "Processor\t: AArch64 Processor rev 2 (aarch64)\n"
+            "processor\t: 6\n"
+            "Processor\t: AArch64 Processor rev 2 (aarch64)\n"
+            "processor\t: 7\n"
+            "Processor\t: AArch64 Processor rev 2 (aarch64)\n"
         ),
+        "cat /sys/devices/system/cpu/present": "0-7\n",
+        "cat /sys/devices/system/cpu/online": "0-7\n",
+        "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq": "576000\n",
+        "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq": "300000\n",
+        "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq": "2841600\n",
+        "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor": "schedutil\n",
         "cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq": "2841600\n",
+        "uname -r": "4.14.186+\n",
+        "uname -a": (
+            "Linux localhost 4.14.186+ #1 SMP PREEMPT Wed Jun 2 12:00:00 2021 aarch64\n"
+        ),
+        "cat /proc/uptime": "123456.78 987654.32\n",
+        "date +%s": "1622773057\n",
         "wm size": "Physical size: 1080x2340\n",
         "wm density": "Physical density: 440\n",
         "dumpsys display": (
@@ -174,8 +206,14 @@ def _normal() -> dict[str, str]:
             "  mRefreshRate=60.000004\n"
             "  mDefaultRefreshRate=60.000004\n"
             "  mCurrentOrientation=0\n"
+            "  DisplayModeInfo{id=0, width=1080, height=2340, refreshRate=60.000004}\n"
+            "  DisplayModeInfo{id=1, width=1080, height=2340, refreshRate=90.000000}\n"
         ),
         "dumpsys input": "SurfaceOrientation: 0\n",
+        "dumpsys SurfaceFlinger": (
+            "Display 0 HWC layers: 2\n"
+            "GLES: Qualcomm, Adreno (TM) 610\n"
+        ),
         "df -k /data": (
             "Filesystem      1K-blocks     Used Available Use% Mounted on\n"
             "/dev/block/sda11 121934848 69120000 52814848 57% /data\n"

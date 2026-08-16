@@ -12,12 +12,11 @@ import pytest
 
 from android_task_manager.adb.exceptions import ADBDisconnectedError, ADBTimeoutError
 from android_task_manager.network_investigation.collector import (
-    NetworkInvestigationCollector,
     _SOCKET_TABLES,
+    NetworkInvestigationCollector,
 )
 from android_task_manager.network_investigation.models import (
     NetworkInvestigationSnapshot,
-    SocketInfo,
 )
 from android_task_manager.network_investigation.parser import (
     SocketTableParseError,

@@ -180,7 +180,7 @@ def test_collector_issues_stat_and_frequency_commands() -> None:
     command_lists = runner.calls
     assert ["cat", "/proc/stat"] in command_lists
     for core_id in range(8):
-        assert [f"cat", f"/sys/devices/system/cpu/cpu{core_id}/cpufreq/scaling_cur_freq"] in command_lists
+        assert ["cat", f"/sys/devices/system/cpu/cpu{core_id}/cpufreq/scaling_cur_freq"] in command_lists
 
 
 def test_collector_parses_frequency_to_khz() -> None:

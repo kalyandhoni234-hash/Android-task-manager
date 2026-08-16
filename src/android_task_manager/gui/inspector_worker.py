@@ -13,6 +13,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 from ..adb.connection import CommandRunner, ConnectionManager
 from ..adb.exceptions import ADBError
+from ..core.diagnostics import log_unexpected_failure
 from ..process import ProcessDisappearedError, ProcessInspector
 
 
@@ -50,7 +51,7 @@ class ProcessInspectionWorker(QObject):
         the dashboard stays responsive while the reads are in flight.
         """
         try:
-            pid_int = int(pid)
+            pid_int = int(str(pid))
         except (TypeError, ValueError):
             self.inspection_failed.emit(-1, f"invalid process id: {pid!r}")
             return
@@ -60,6 +61,7 @@ class ProcessInspectionWorker(QObject):
             self.inspection_failed.emit(pid_int, str(exc))
             return
         except Exception as exc:  # noqa: BLE001 - collector bug never freezes GUI
+            log_unexpected_failure("inspection", "sample", exc)
             self.inspection_failed.emit(pid_int, str(exc))
             return
         self.inspection_ready.emit(snapshot)

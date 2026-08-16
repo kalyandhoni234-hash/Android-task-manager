@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from PySide6.QtCore import QObject, Signal, Slot
 
+from ..core.diagnostics import log_unexpected_failure
 from ..updater import UpdateCheckResult, check_for_update
 
 
@@ -39,7 +40,8 @@ class UpdateWorker(QObject):
         self._busy = True
         try:
             result = check_for_update(self._current_version)
-        except Exception:  # noqa: BLE001 - a worker bug never freezes the GUI
+        except Exception as exc:  # noqa: BLE001 - a worker bug never freezes the GUI
+            log_unexpected_failure("updates", "check", exc)
             result = UpdateCheckResult(
                 checked_at=datetime.now(timezone.utc),
                 current_version=self._current_version,

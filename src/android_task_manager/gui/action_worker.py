@@ -24,6 +24,7 @@ from ..action import (
     PackageResolver,
 )
 from ..adb.connection import CommandRunner, ConnectionManager
+from ..core.diagnostics import log_unexpected_failure
 
 
 class ActionWorker(QObject):
@@ -101,7 +102,8 @@ class ActionWorker(QObject):
             )
             if exc.kind is ActionErrorKind.NOT_FOUND and isinstance(package, str):
                 self._drop_package(package)
-        except Exception:  # noqa: BLE001 - a worker bug never freezes the GUI
+        except Exception as exc:  # noqa: BLE001 - a worker bug never freezes the GUI
+            log_unexpected_failure("action", "run", exc)
             result = ActionResult(
                 str(action),
                 str(package),

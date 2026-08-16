@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...action import ActionErrorKind, ActionResult, resolve_package
+from ...action import ActionResult, resolve_package
 from ...baseline import SocketIdentity
 from ...network_investigation.models import NetworkInvestigationSnapshot
 from ...permissions import CombinationFlag, PackagePermissionAudit, PermissionEntry

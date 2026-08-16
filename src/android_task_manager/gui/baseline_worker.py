@@ -16,8 +16,6 @@ exceptions. Duplicate save/check requests while one is in flight are dropped
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 from PySide6.QtCore import QObject, Signal, Slot
 
 from ..adb.connection import CommandRunner, ConnectionManager
@@ -31,6 +29,7 @@ from ..baseline import (
     write_drift_events_csv,
     write_session_json,
 )
+from ..core.diagnostics import log_unexpected_failure
 from ..heuristics import HeuristicReport, evaluate_heuristics
 from ..network_investigation.collector import NetworkInvestigationCollector
 from ..process.collector import ProcessCollector
@@ -150,7 +149,8 @@ class BaselineWorker(QObject):
         except ADBError as exc:
             self.baseline_failed.emit(str(exc))
             return
-        except Exception:  # noqa: BLE001 - a worker bug never freezes the GUI
+        except Exception as exc:  # noqa: BLE001 - a worker bug never freezes the GUI
+            log_unexpected_failure("baseline", "save", exc)
             self.baseline_failed.emit("The baseline save failed unexpectedly.")
             return
         finally:
@@ -168,7 +168,8 @@ class BaselineWorker(QObject):
         except ADBError as exc:
             self.drift_failed.emit(str(exc))
             return
-        except Exception:  # noqa: BLE001 - a worker bug never freezes the GUI
+        except Exception as exc:  # noqa: BLE001 - a worker bug never freezes the GUI
+            log_unexpected_failure("baseline", "check", exc)
             self.drift_failed.emit("The drift check failed unexpectedly.")
             return
         finally:
@@ -189,7 +190,8 @@ class BaselineWorker(QObject):
         except (OSError, ValueError) as exc:
             self.export_completed.emit(False, f"Export failed: {exc}")
             return
-        except Exception:  # noqa: BLE001 - a worker bug never freezes the GUI
+        except Exception as exc:  # noqa: BLE001 - a worker bug never freezes the GUI
+            log_unexpected_failure("baseline", "export", exc)
             self.export_completed.emit(False, "The export failed unexpectedly.")
             return
         finally:

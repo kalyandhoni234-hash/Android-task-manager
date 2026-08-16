@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
-
 from android_task_manager.baseline.diff import diff_snapshot
 from android_task_manager.baseline.models import (
     SEVERITY_INFO,

@@ -8,7 +8,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from android_task_manager.adb.connection import ConnectionManager
-from android_task_manager.adb.exceptions import ADBTimeoutError
 
 
 class _FakeRun:

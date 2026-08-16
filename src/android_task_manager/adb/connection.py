@@ -8,21 +8,25 @@ typed exceptions on failure.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Protocol, Sequence
 
+from ..core.diagnostics import register_secret
 from .exceptions import (
     ADBAmbiguousDeviceError,
     ADBCommandError,
     ADBDisconnectedError,
     ADBError,
-    ADBNotFoundError,
     ADBNoDeviceError,
+    ADBNotFoundError,
     ADBTimeoutError,
     ADBUnauthorizedError,
 )
+
+logger = logging.getLogger("android_task_manager.adb.connection")
 
 #: Token set by adb for an online, authorized device in ``adb devices`` output.
 _AUTHORIZED_STATE = "device"
@@ -48,13 +52,23 @@ class Device:
 
 
 class CommandRunner(Protocol):
-    """Minimal ADB facade used by collectors (satisfied by ConnectionManager).
+    """Minimal ADB facade used by collectors and workers (ConnectionManager).
 
     Keeping this as an interface lets collectors be tested with fakes rather
-    than a real device or ``subprocess``.
+    than a real device or ``subprocess``. The connection lifecycle methods
+    are part of the contract because the monitor worker drives connect /
+    retry / multi-device selection through this same interface.
     """
 
     def shell(self, args: Sequence[str], timeout: float | None = None) -> str: ...
+
+    def verify_available(self) -> None: ...
+
+    def require_device(self) -> str: ...
+
+    def list_devices(self) -> list[Device]: ...
+
+    def get_device_details(self, serial: str) -> dict[str, str]: ...
 
 
 class ConnectionManager:
@@ -112,7 +126,11 @@ class ConnectionManager:
             if len(parts) < 2 or parts[0] == "*":
                 # Ignore decorations such as "daemon started successfully".
                 continue
-            devices.append(Device(serial=parts[0], state=parts[1]))
+            serial, state = parts[0], parts[1]
+            # Serials are secrets: registering them keeps every formatted
+            # log line scrubbed (errors from adb quote serials too).
+            register_secret(serial)
+            devices.append(Device(serial=serial, state=state))
         return devices
 
     def require_device(self) -> str:
@@ -189,6 +207,12 @@ class ConnectionManager:
                 command,
                 timeout if timeout is not None else self._timeout,
             ) from exc
+        except OSError as exc:
+            # Anything else that prevents adb from launching (permissions,
+            # a vanished executable, broken pipes when a device drops mid-
+            # command on Windows) maps to the typed hierarchy, never a raw
+            # subprocess error escaping to collectors/workers/GUI.
+            raise ADBError(f"adb could not be started: {exc}") from exc
         return ADBCommandResult(
             stdout=completed.stdout,
             stderr=completed.stderr,
@@ -208,11 +232,13 @@ class ConnectionManager:
         serial = self.require_device()
         result = self.execute(["-s", serial, "shell", *args], timeout=timeout)
         if result.exit_code != 0:
-            if "offline" in result.stderr:
+            stderr = result.stderr
+            if self._device_lost(stderr):
                 raise ADBDisconnectedError(
-                    f"Device {serial} went offline during the command."
+                    f"Device {serial} is no longer available "
+                    f"(offline, gone, or adb server lost it): {stderr.strip()}"
                 )
-            if "unauthorized" in result.stderr:
+            if "unauthorized" in stderr:
                 raise ADBUnauthorizedError(serial)
             raise ADBCommandError(
                 "shell " + " ".join(args),
@@ -221,6 +247,28 @@ class ConnectionManager:
                 stderr=result.stderr,
             )
         return result.stdout
+
+    @staticmethod
+    def _device_lost(stderr: str) -> bool:
+        """True when adb's error text means the target device is gone.
+
+        Matches the states a device can fall into mid-command: ``offline``,
+        ``closed``, a vanished serial (``device '...' not found``) and a
+        vanished server/device table (``no devices/emulators found``). adb
+        prints these to stderr with a non-zero exit status.
+        """
+        lowered = stderr.lower()
+        if "offline" in lowered or "closed" in lowered:
+            return True
+        if "no devices/emulators found" in lowered:
+            return True
+        # "not found" alone is ambiguous: a remote command can fail with
+        # "getprop: not found" while the device is perfectly healthy. Only
+        # treat it as device loss when adb itself reports a vanished device
+        # ("error: device 'A1' not found").
+        if "not found" in lowered and ("device" in lowered or "emulator" in lowered):
+            return True
+        return False
 
     def get_prop(self, name: str) -> str:
         """Read a device system property (empty string if unset)."""

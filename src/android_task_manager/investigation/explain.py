@@ -18,7 +18,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from ..baseline.models import (
-    CATEGORY_SOCKET,
     CHANGE_NEW,
     BaselineSnapshot,
     DriftReport,

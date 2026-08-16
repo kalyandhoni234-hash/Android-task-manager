@@ -19,17 +19,14 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
+from ..baseline.export import Session
 from ..baseline.models import (
-    CATEGORY_PACKAGE,
-    CATEGORY_PROCESS,
-    CATEGORY_SOCKET,
     BaselineSnapshot,
     DriftEvent,
     PackageIdentity,
     ProcessRef,
     SocketIdentity,
 )
-from ..baseline.export import Session
 from ..heuristics.models import HeuristicReport, SuspiciousSignal
 from ..network_investigation.models import NetworkInvestigationSnapshot
 from ..permissions.models import PackagePermissionAudit

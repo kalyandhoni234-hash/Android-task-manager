@@ -21,7 +21,7 @@ from android_task_manager.baseline.models import (
     SocketIdentity,
 )
 from android_task_manager.heuristics.evaluate import RULES, evaluate_heuristics
-from android_task_manager.heuristics.models import HeuristicReport, SEVERITY_HIGH
+from android_task_manager.heuristics.models import SEVERITY_HIGH, HeuristicReport
 from android_task_manager.heuristics.rules import (
     RULE_MULTIPLE_NEW_LISTENING_SOCKETS_SAME_PROCESS,
     RULE_NEW_PROCESS_WITH_ACTIVE_SOCKET,

@@ -13,7 +13,7 @@ from typing import Sequence
 from ..adb.connection import CommandRunner
 from ..adb.exceptions import ADBError
 from .calculation import calculate_delta, utilization_percent
-from .models import CPUCore, CPUCounters, CPUSnapshot, ProcStat
+from .models import CPUCore, CPUSnapshot, ProcStat
 from .parser import CPUParseError, parse_proc_stat, parse_scaling_frequency
 
 

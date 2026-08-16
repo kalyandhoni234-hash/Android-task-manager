@@ -360,8 +360,8 @@ class TestSuspiciousSignals:
         panel.show_drift(report, heuristics)
 
         severities = panel.findChildren(QLabel)
-        high = [l for l in severities if l.text() == "HIGH" and l.property("level") == "high"]
-        medium = [l for l in severities if l.text() == "MEDIUM" and l.property("level") == "elevated"]
+        high = [label for label in severities if label.text() == "HIGH" and label.property("level") == "high"]
+        medium = [label for label in severities if label.text() == "MEDIUM" and label.property("level") == "elevated"]
         assert high and medium
         assert _labels_with_text(panel, signals[0].reason)
         assert _labels_with_text(panel, signals[1].reason)
@@ -521,9 +521,9 @@ class StubRunner:
 class _FakeBaselineWorker(BaselineWorker):
     """BaselineWorker whose device read is replaced by a fixture."""
 
-    def __init__(self, result=current_snapshot(), error: Exception | None = None) -> None:
+    def __init__(self, result=None, error: Exception | None = None) -> None:
         super().__init__(connection=StubRunner(""))
-        self._result = result
+        self._result = current_snapshot() if result is None else result
         self._error = error
 
     def build(self):

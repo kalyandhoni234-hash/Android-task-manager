@@ -24,7 +24,6 @@ from __future__ import annotations
 from .models import (
     NetworkInterfaceSnapshot,
     NetworkSnapshot,
-    NetworkThroughput,
 )
 
 #: Interface name prefixes that never carry real, user-facing traffic.

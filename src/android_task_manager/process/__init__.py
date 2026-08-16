@@ -7,3 +7,11 @@ collection with ``inspector_*`` modules.
 from .inspector_collector import ProcessDisappearedError, ProcessInspectionError, ProcessInspector
 from .inspector_models import ProcessInspectionSnapshot
 from .inspector_parser import StatParseError
+
+__all__ = [
+    "ProcessDisappearedError",
+    "ProcessInspectionError",
+    "ProcessInspector",
+    "ProcessInspectionSnapshot",
+    "StatParseError",
+]

@@ -30,7 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from ..baseline.models import SEVERITY_INFO, CHANGE_NEW, CHANGE_REMOVED
+from ..baseline.models import CHANGE_NEW, CHANGE_REMOVED, SEVERITY_INFO
 from ..heuristics.models import SEVERITY_HIGH, SEVERITY_MEDIUM
 from ..network_investigation.models import SocketInfo
 from ..permissions.models import CombinationFlag, PermissionEntry

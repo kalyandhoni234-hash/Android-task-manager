@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QWidget
 
 from ...battery.models import BatterySnapshot
 from ..thresholds import MetricLevel, apply_metric_level, classify_temperature

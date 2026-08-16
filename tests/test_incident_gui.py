@@ -17,8 +17,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication
 
 from android_task_manager.gui.incident_dialog import IncidentDialog
 from android_task_manager.gui.incident_worker import IncidentWorker

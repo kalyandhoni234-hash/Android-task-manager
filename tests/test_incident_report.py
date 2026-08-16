@@ -21,7 +21,7 @@ from android_task_manager.baseline.models import (
     CATEGORY_SOCKET,
     CHANGE_NEW,
 )
-from android_task_manager.heuristics.models import SEVERITY_HIGH, SEVERITY_MEDIUM
+from android_task_manager.heuristics.models import SEVERITY_HIGH
 from android_task_manager.incident.builder import build_incident_report
 from android_task_manager.incident.models import (
     ASSESSMENT_INFORMATIONAL,
@@ -38,7 +38,6 @@ from android_task_manager.incident.models import (
     FINDING_PERMISSION_COMBINATION,
     FINDING_SUSPICIOUS_SIGNAL,
     SCHEMA_VERSION,
-    STATUS_BASELINE,
     IncidentReport,
 )
 from tests import incident_fixtures as fx

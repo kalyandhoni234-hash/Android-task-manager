@@ -22,7 +22,6 @@ from android_task_manager.investigation.models import (
     ObservationState,
 )
 from android_task_manager.investigation.stability import (
-    MIN_PERSISTENT_OBSERVATIONS,
     stabilize_drift,
 )
 from tests import investigation_fixtures as fx

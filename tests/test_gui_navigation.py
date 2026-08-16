@@ -18,7 +18,6 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QScrollArea, QWidget
 
 from android_task_manager.baseline import BaselineSnapshot, ProcessRef, diff_snapshot

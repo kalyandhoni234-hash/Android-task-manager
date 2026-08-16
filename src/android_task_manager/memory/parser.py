@@ -7,8 +7,6 @@ required field that is missing or malformed raises a controlled
 
 from __future__ import annotations
 
-from typing import Mapping
-
 #: Maps the raw /proc/meminfo field name to the normalized snapshot attribute.
 _FIELD_MAP: dict[str, str] = {
     "MemTotal": "total_kb",

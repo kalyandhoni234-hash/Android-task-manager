@@ -12,6 +12,7 @@ in between.
 
 from __future__ import annotations
 
+import logging
 import time
 from enum import Enum
 
@@ -22,18 +23,21 @@ from ..adb.exceptions import (
     ADBAmbiguousDeviceError,
     ADBDisconnectedError,
     ADBError,
-    ADBNotFoundError,
     ADBNoDeviceError,
+    ADBNotFoundError,
     ADBTimeoutError,
     ADBUnauthorizedError,
 )
 from ..battery.collector import BatteryCollector
+from ..core.diagnostics import log_unexpected_failure
 from ..cpu.collector import CPUCollector
 from ..device.collector import DeviceInfoCollector
 from ..memory.collector import MemoryCollector
 from ..network.collector import NetworkCollector
 from ..network_investigation.collector import NetworkInvestigationCollector
 from ..process.collector import ProcessCollector
+
+logger = logging.getLogger("android_task_manager.monitor")
 
 
 class ConnectionState(Enum):
@@ -52,6 +56,19 @@ class ConnectionState(Enum):
     UNAUTHORIZED = "unauthorized"
     TIMEOUT = "timeout"
     COLLECTOR_ERROR = "collector error"
+
+
+#: States that mean the *device* is lost (as opposed to a transient single
+#: read failure). Telemetry is invalidated and the connection re-established
+#: from scratch when any of these is observed.
+_DEVICE_LOSS_STATES = frozenset(
+    {
+        ConnectionState.DISCONNECTED,
+        ConnectionState.OFFLINE,
+        ConnectionState.UNAUTHORIZED,
+        ConnectionState.ADB_ERROR,
+    }
+)
 
 
 class MonitorWorker(QObject):
@@ -176,27 +193,47 @@ class MonitorWorker(QObject):
             self._connected = True
             self.connection_changed.emit(ConnectionState.CONNECTED, "")
         except ADBNotFoundError as exc:
-            self._connected = False
-            self.connection_changed.emit(ConnectionState.ADB_MISSING, str(exc))
+            self._connect_failed(ConnectionState.ADB_MISSING, exc)
         except ADBAmbiguousDeviceError as exc:
-            self._connected = False
-            self.connection_changed.emit(ConnectionState.MULTIPLE_DEVICES, str(exc))
+            self._connect_failed(ConnectionState.MULTIPLE_DEVICES, exc)
             self._report_devices()
         except ADBNoDeviceError as exc:
-            self._connected = False
-            self.connection_changed.emit(ConnectionState.DISCONNECTED, str(exc))
+            self._connect_failed(ConnectionState.DISCONNECTED, exc)
         except ADBDisconnectedError as exc:
-            self._connected = False
-            self.connection_changed.emit(ConnectionState.OFFLINE, str(exc))
+            self._connect_failed(ConnectionState.OFFLINE, exc)
         except ADBUnauthorizedError as exc:
-            self._connected = False
-            self.connection_changed.emit(ConnectionState.UNAUTHORIZED, str(exc))
+            self._connect_failed(ConnectionState.UNAUTHORIZED, exc)
         except ADBTimeoutError as exc:
-            self._connected = False
-            self.connection_changed.emit(ConnectionState.TIMEOUT, str(exc))
+            self._connect_failed(ConnectionState.TIMEOUT, exc)
         except Exception as exc:  # noqa: BLE001 - never surface tracebacks
-            self._connected = False
-            self.connection_changed.emit(ConnectionState.ADB_ERROR, str(exc))
+            log_unexpected_failure("monitor", "connect", exc)
+            self._connect_failed(ConnectionState.ADB_ERROR, exc)
+
+    def _connect_failed(self, state: ConnectionState, exc: BaseException) -> None:
+        """Record a failed connect: log it, drop stale telemetry, emit."""
+        logger.warning("connection failed (%s): %s", state.value, exc)
+        self._connected = False
+        self._invalidate_snapshots()
+        self.connection_changed.emit(state, str(exc))
+
+    def _invalidate_snapshots(self) -> None:
+        """Drop every cached telemetry snapshot.
+
+        Called when the device is lost: data collected from a previous
+        device/session must never be presented as current, and the next
+        successful connect re-collects everything from scratch.
+        """
+        self._cpu = None
+        self._memory = None
+        self._processes = None
+        self._battery = None
+        self._network = None
+        self._network_investigation = None
+        self._last_memory_at = 0.0
+        self._last_process_at = 0.0
+        self._last_battery_at = 0.0
+        self._last_network_at = 0.0
+        self._last_network_investigation_at = 0.0
 
     def _report_devices(self) -> None:
         """Enumerate attached devices (best-effort) for the selection UI."""
@@ -214,7 +251,8 @@ class MonitorWorker(QObject):
                     entry["label"] = device.serial
                     entry["android_version"] = ""
                 devices.append(entry)
-        except Exception:  # noqa: BLE001 - listing must never crash the loop
+        except Exception as exc:  # noqa: BLE001 - listing must never crash the loop
+            log_unexpected_failure("monitor", "devices", exc)
             devices = []
         self.devices_available.emit(devices)
 
@@ -272,6 +310,7 @@ class MonitorWorker(QObject):
                 state = ConnectionState.ADB_ERROR
                 errors.append(f"{label}: {exc}")
             except Exception as exc:  # noqa: BLE001 - collector bug ≠ GUI crash
+                log_unexpected_failure("monitor.collect", label, exc)
                 state = ConnectionState.COLLECTOR_ERROR
                 errors.append(f"{label}: {exc}")
 
@@ -302,6 +341,18 @@ class MonitorWorker(QObject):
 
         if errors:
             self.connection_changed.emit(state, "; ".join(errors))
+            if state in _DEVICE_LOSS_STATES:
+                # The device is gone: drop every cached snapshot (telemetry
+                # from the old session must never be presented as current),
+                # publish an unambiguous empty snapshot, and let run()'s loop
+                # re-establish the connection from scratch.
+                logger.warning(
+                    "device lost while sampling (%s): %s", state.value, "; ".join(errors)
+                )
+                self._invalidate_snapshots()
+                self._connected = False
+                self.snapshots.emit(None, None, None, None, None)
+                return
         else:
             self.connection_changed.emit(ConnectionState.CONNECTED, "")
 

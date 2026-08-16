@@ -44,6 +44,66 @@ jobs:
       - name: Verify package builds
         run: python -m build --outdir dist
 
+  lint:
+    name: Lint (Ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install lint tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[dev]"
+
+      - name: Ruff check (src + tests)
+        run: python -m ruff check src tests
+
+  typecheck:
+    name: Type check (Mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install type-check tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[dev]"
+
+      # Enforced scope: the pure core (diagnostics) and the ADB layer —
+      # the Phase-1 reliability surfaces. The GUI layer's pre-existing
+      # PySide6 typing debt is tracked separately (see pyproject.toml).
+      - name: Mypy (core + adb)
+        run: |
+          python -m mypy \
+            src/android_task_manager/core \
+            src/android_task_manager/adb
+
+  audit:
+    name: Dependency audit (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project + audit tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[dev,gui]"
+
+      - name: Audit dependencies
+        run: python -m pip_audit
+
   website:
     name: Website (lint + static build)
     runs-on: ubuntu-latest

@@ -18,7 +18,8 @@ from PySide6.QtCore import QObject, Signal, Slot
 
 from ..adb.connection import CommandRunner, ConnectionManager
 from ..adb.exceptions import ADBError
-from ..permissions import PackagePermissionAudit, PermissionCollector
+from ..core.diagnostics import log_unexpected_failure
+from ..permissions import PermissionCollector
 
 
 class PermissionWorker(QObject):
@@ -64,7 +65,8 @@ class PermissionWorker(QObject):
         except ADBError as exc:
             self.audit_failed.emit(package_name, str(exc))
             return
-        except Exception:  # noqa: BLE001 - a worker bug never freezes the GUI
+        except Exception as exc:  # noqa: BLE001 - a worker bug never freezes the GUI
+            log_unexpected_failure("permissions", "audit", exc)
             self.audit_failed.emit(package_name, "The permission audit failed unexpectedly.")
             return
         finally:

@@ -12,7 +12,7 @@ from __future__ import annotations
 import time
 
 from .calculation import is_traffic_interface, throughput_for
-from .models import NetworkInterfaceSnapshot, NetworkSnapshot, NetworkThroughput
+from .models import NetworkSnapshot, NetworkThroughput
 from .parser import parse_proc_net_dev
 
 

@@ -19,7 +19,6 @@ from android_task_manager.updater import (
     is_newer,
     parse_version,
 )
-
 from android_task_manager.updater import check as check_module
 
 

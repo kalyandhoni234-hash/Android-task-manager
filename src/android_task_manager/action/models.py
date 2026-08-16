@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+
 #: Human-meaningful, machine-checkable failure categories. These map 1:1 to
 #: the existing typed ADB exception hierarchy plus validation failures.
 class ActionErrorKind(Enum):

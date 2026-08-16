@@ -29,8 +29,16 @@ dependencies = []
 
 [project.optional-dependencies]
 # Test/build tooling: pytest for the suite, build for wheel/sdist creation,
-# pyinstaller for the standalone Windows executables (packaging/build_windows.ps1).
-dev = ["pytest>=7.0", "build>=1.0", "pyinstaller>=6.0"]
+# pyinstaller for the standalone Windows executables (packaging/build_windows.ps1),
+# ruff for linting, mypy for type checking, pip-audit for dependency auditing.
+dev = [
+    "pytest>=7.0",
+    "build>=1.0",
+    "pyinstaller>=6.0",
+    "ruff>=0.9",
+    "mypy>=1.13",
+    "pip-audit>=2.9",
+]
 # PySide6: the single GUI dependency (Qt for Python). It powers the desktop
 # dashboard only; the terminal mode does not need it. Install with:
 #   pip install -e ".[gui]"
@@ -49,3 +57,23 @@ version = { attr = "android_task_manager.__version__" }
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.ruff]
+# Pragmatic lint baseline for the whole tree: pyflakes (F), fatal/statement
+# pycodestyle errors (E4/E7/E9), import sorting (I) and bugbear (B). The
+# codebase's intentional broad `except Exception` handlers are annotated
+# with `# noqa: BLE001` so bugbear can actually enforce them.
+line-length = 100
+target-version = "py310"
+extend-exclude = ["android-task-manager-website"]
+lint.select = ["E4", "E7", "E9", "F", "I", "B"]
+
+[tool.mypy]
+# Type-checking scope: the pure core + ADB layer are enforced in CI
+# (src/android_task_manager/core, src/android_task_manager/adb). The GUI
+# layer carries pre-existing PySide6 typing debt that is tracked for later
+# phases; new code in enforced paths must stay clean.
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_ignores = false
+check_untyped_defs = false

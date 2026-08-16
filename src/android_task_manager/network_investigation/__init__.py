@@ -11,8 +11,8 @@ the deliberate absence of PID/interface attribution.
 from .collector import NetworkInvestigationCollector
 from .models import NetworkInvestigationSnapshot, SocketInfo
 from .parser import (
-    SocketTableParseError,
     TCP_STATES,
+    SocketTableParseError,
     parse_socket_table,
     parse_uid_packages,
 )

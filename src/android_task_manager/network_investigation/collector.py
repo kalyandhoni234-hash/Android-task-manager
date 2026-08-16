@@ -18,7 +18,6 @@ from __future__ import annotations
 import time
 
 from ..adb.exceptions import (
-    ADBCommandError,
     ADBDisconnectedError,
     ADBError,
     ADBNoDeviceError,
