@@ -7,12 +7,13 @@ malformed-output tolerance every parser must have.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 
 from android_task_manager.device.models import StorageInfo
 from android_task_manager.device.parser import (
+    SU_NOT_FOUND,
     collect_ipv4_addresses,
     collect_ipv6_addresses,
     derive_boot_time,
@@ -21,6 +22,7 @@ from android_task_manager.device.parser import (
     mark_default_route,
     parse_active_transport,
     parse_android_id,
+    parse_bootloader_locked,
     parse_charge_full_design,
     parse_connectivity_dns,
     parse_cpu_features,
@@ -31,6 +33,8 @@ from android_task_manager.device.parser import (
     parse_cpuinfo_model_name,
     parse_cycle_count,
     parse_df_k,
+    parse_encryption_state,
+    parse_encryption_type,
     parse_epoch_seconds,
     parse_getprop_output,
     parse_governor,
@@ -43,10 +47,16 @@ from android_task_manager.device.parser import (
     parse_orientation,
     parse_orientation_degrees,
     parse_proc_uptime,
+    parse_property_bool,
     parse_refresh_rate,
+    parse_root_status,
+    parse_security_patch_date,
+    parse_selinux_status,
     parse_supported_refresh_rates,
     parse_uname_a,
     parse_uname_a_machine,
+    parse_verified_boot_state,
+    parse_verity_mode,
     parse_vpn_state,
     parse_wifi_bssid,
     parse_wifi_connected,
@@ -1245,3 +1255,218 @@ def test_vpn_state_case_insensitive() -> None:
 def test_vpn_state_unavailable() -> None:
     assert parse_vpn_state("") == (None, None)
     assert parse_vpn_state("dumpsys: unknown service vpn\n") == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# Security posture (Phase 2F): SELinux
+# ---------------------------------------------------------------------------
+
+
+def test_selinux_status_canonical_modes() -> None:
+    assert parse_selinux_status("Enforcing\n") == "enforcing"
+    assert parse_selinux_status("Permissive") == "permissive"
+    assert parse_selinux_status("Disabled\n") == "disabled"
+
+
+def test_selinux_status_case_and_whitespace_tolerated() -> None:
+    assert parse_selinux_status("  ENFORCING  \n") == "enforcing"
+    assert parse_selinux_status("permissive\r\n") == "permissive"
+
+
+def test_selinux_status_malformed_is_none() -> None:
+    assert parse_selinux_status("permissive-ish\n") is None
+    assert parse_selinux_status("maybe\n") is None
+    assert parse_selinux_status("") is None
+
+
+def test_selinux_status_failure_is_none_never_disabled() -> None:
+    # A failed read (None) must NOT be interpreted as "disabled".
+    assert parse_selinux_status(None) is None
+
+
+# ---------------------------------------------------------------------------
+# Security posture (Phase 2F): verified boot / verity
+# ---------------------------------------------------------------------------
+
+
+def test_verified_boot_state_all_android_states() -> None:
+    for state in ("green", "yellow", "orange", "red"):
+        assert parse_verified_boot_state(state) == state
+
+
+def test_verified_boot_state_normalized_lowercase() -> None:
+    assert parse_verified_boot_state("ORANGE") == "orange"
+
+
+def test_verified_boot_state_missing_or_malformed_is_none() -> None:
+    assert parse_verified_boot_state(None) is None
+    assert parse_verified_boot_state("blue") is None
+    assert parse_verified_boot_state("") is None
+
+
+def test_verity_mode_all_modes() -> None:
+    for mode in ("enforcing", "eio", "logging", "disabled"):
+        assert parse_verity_mode(mode) == mode
+
+
+def test_verity_mode_missing_or_malformed_is_none() -> None:
+    assert parse_verity_mode(None) is None
+    assert parse_verity_mode("off") is None
+    assert parse_verity_mode("") is None
+
+
+# ---------------------------------------------------------------------------
+# Security posture (Phase 2F): bootloader lock state
+# ---------------------------------------------------------------------------
+
+
+def test_bootloader_locked_primary_property() -> None:
+    assert parse_bootloader_locked("1", None) is True
+    assert parse_bootloader_locked("0", None) is False
+    assert parse_bootloader_locked("true", None) is True
+    assert parse_bootloader_locked("false", None) is False
+
+
+def test_bootloader_locked_vbmeta_corroboration() -> None:
+    assert parse_bootloader_locked(None, "locked") is True
+    assert parse_bootloader_locked(None, "unlocked") is False
+    assert parse_bootloader_locked(None, "LOCKED") is True
+
+
+def test_bootloader_locked_agreeing_sources() -> None:
+    assert parse_bootloader_locked("1", "locked") is True
+    assert parse_bootloader_locked("0", "unlocked") is False
+
+
+def test_bootloader_locked_conflicting_sources_is_none() -> None:
+    # Contradictory evidence is UNKNOWN, never resolved by guessing.
+    assert parse_bootloader_locked("1", "unlocked") is None
+    assert parse_bootloader_locked("0", "locked") is None
+
+
+def test_bootloader_locked_malformed_or_missing_is_none() -> None:
+    assert parse_bootloader_locked(None, None) is None
+    assert parse_bootloader_locked("2", None) is None
+    assert parse_bootloader_locked(None, "floating") is None
+    assert parse_bootloader_locked("", "") is None
+
+
+# ---------------------------------------------------------------------------
+# Security posture (Phase 2F): root evidence
+# ---------------------------------------------------------------------------
+
+
+def test_root_status_session_running_as_root() -> None:
+    assert (
+        parse_root_status(
+            "uid=0(root) gid=0(root) groups=0(root)\n", SU_NOT_FOUND + "\n"
+        )
+        == "ROOT_EVIDENCE"
+    )
+
+
+def test_root_status_su_on_path_is_evidence() -> None:
+    assert (
+        parse_root_status(
+            "uid=2000(shell) gid=2000(shell) groups=2000(shell)\n",
+            "/system/xbin/su\n",
+        )
+        == "ROOT_EVIDENCE"
+    )
+
+
+def test_root_status_no_evidence_from_both_sources() -> None:
+    assert (
+        parse_root_status(
+            "uid=2000(shell) gid=2000(shell) groups=2000(shell)\n",
+            SU_NOT_FOUND + "\n",
+        )
+        == "NO_ROOT_EVIDENCE"
+    )
+
+
+def test_root_status_su_not_found_without_id_is_no_evidence() -> None:
+    assert parse_root_status(None, SU_NOT_FOUND + "\n") == "NO_ROOT_EVIDENCE"
+
+
+def test_root_status_id_unparseable_with_marker_is_no_evidence() -> None:
+    assert parse_root_status("garbage\n", SU_NOT_FOUND + "\n") == "NO_ROOT_EVIDENCE"
+
+
+def test_root_status_all_sources_failed_is_none() -> None:
+    assert parse_root_status(None, None) is None
+
+
+def test_root_status_empty_su_output_is_ambiguous() -> None:
+    # Empty output is neither a path nor the marker: UNKNOWN, not a claim.
+    assert parse_root_status(None, "") is None
+
+
+def test_root_status_shell_error_text_is_not_evidence() -> None:
+    # "...: not found" is shell error text, not a located path: it must
+    # never become ROOT_EVIDENCE and without other sources stays UNKNOWN.
+    assert parse_root_status(None, "command -v: su: not found\n") is None
+
+
+# ---------------------------------------------------------------------------
+# Security posture (Phase 2F): build security properties
+# ---------------------------------------------------------------------------
+
+
+def test_property_bool_numeric_and_word_values() -> None:
+    assert parse_property_bool("1") is True
+    assert parse_property_bool("0") is False
+    assert parse_property_bool("true") is True
+    assert parse_property_bool("false") is False
+
+
+def test_property_bool_case_and_whitespace_tolerated() -> None:
+    assert parse_property_bool(" TRUE \n") is True
+
+
+def test_property_bool_missing_or_malformed_is_none() -> None:
+    assert parse_property_bool(None) is None
+    assert parse_property_bool("maybe") is None
+    assert parse_property_bool("") is None
+
+
+def test_security_patch_date_parses_valid() -> None:
+    assert parse_security_patch_date("2026-08-01") == date(2026, 8, 1)
+    assert parse_security_patch_date(" 2021-06-01\n") == date(2021, 6, 1)
+
+
+def test_security_patch_date_rejects_malformed() -> None:
+    assert parse_security_patch_date("2026/08/01") is None
+    assert parse_security_patch_date("2026-99-99") is None
+    assert parse_security_patch_date("Aug 2026") is None
+    assert parse_security_patch_date("") is None
+    assert parse_security_patch_date(None) is None
+
+
+# ---------------------------------------------------------------------------
+# Security posture (Phase 2F): encryption
+# ---------------------------------------------------------------------------
+
+
+def test_encryption_state_parses() -> None:
+    assert parse_encryption_state("encrypted") == "encrypted"
+    assert parse_encryption_state("unencrypted") == "unencrypted"
+    assert parse_encryption_state("ENCRYPTED") == "encrypted"
+
+
+def test_encryption_state_unknown_or_malformed_is_none() -> None:
+    assert parse_encryption_state(None) is None
+    assert parse_encryption_state("encryptedish") is None
+    assert parse_encryption_state("") is None
+
+
+def test_encryption_type_parses() -> None:
+    assert parse_encryption_type("file") == "file"
+    assert parse_encryption_type("block") == "block"
+    assert parse_encryption_type("BLOCK") == "block"
+
+
+def test_encryption_type_unknown_or_malformed_is_none() -> None:
+    assert parse_encryption_type(None) is None
+    assert parse_encryption_type("inline") is None
+    assert parse_encryption_type("") is None

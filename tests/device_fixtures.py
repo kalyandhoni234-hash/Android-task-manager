@@ -135,6 +135,93 @@ def scenario(name: str) -> dict[str, str]:
                 "reason: (unspecified)\n"
             ),
         }
+    if name == "security_permissive":
+        # SELinux running, but permissive: the mode fact changes, the rest
+        # of the snapshot is untouched.
+        return {**base, "getenforce": "Permissive\n"}
+    if name == "security_unlocked":
+        # Unlocked bootloader on a (still enforcing) userdebug-style build:
+        # verified-boot state degrades to orange, both lock sources agree.
+        props = _strip_properties(base["getprop"], "ro.boot.verifiedbootstate")
+        props = props.replace(
+            "[ro.boot.flash.locked]: [1]",
+            "[ro.boot.flash.locked]: [0]",
+        ).replace(
+            "[ro.boot.vbmeta.device_state]: [locked]",
+            "[ro.boot.vbmeta.device_state]: [unlocked]",
+        ).replace(
+            "[ro.debuggable]: [0]",
+            "[ro.debuggable]: [1]",
+        ).replace(
+            "[ro.secure]: [1]",
+            "[ro.secure]: [0]",
+        )
+        return {
+            **base,
+            "getprop": props + "[ro.boot.verifiedbootstate]: [orange]\n",
+            "id": (
+                "uid=2000(shell) gid=2000(shell) groups=2000(shell),1004(input),"
+                "1007(log),1011(adb),1015(sdcard_rw)\n"
+            ),
+        }
+    if name == "security_root_evidence":
+        # Simulated rooted device: a su binary answers on PATH. This is
+        # sanitized fixture evidence, not a real device or a real su run.
+        return {
+            **base,
+            "command -v su || echo __SU_NOT_FOUND__": "/system/xbin/su\n",
+        }
+    if name == "security_unknown":
+        # Every security source unavailable or property absent: each fact
+        # must be UNKNOWN (None) while the rest of the snapshot survives.
+        props = _strip_properties(
+            base["getprop"],
+            "ro.boot.verifiedbootstate",
+            "ro.boot.flash.locked",
+            "ro.boot.vbmeta.device_state",
+            "ro.boot.veritymode",
+            "ro.debuggable",
+            "ro.secure",
+            "ro.crypto.state",
+            "ro.crypto.type",
+        )
+        return failing_commands(
+            {**base, "getprop": props},
+            ["getenforce", "id", "command -v su || echo __SU_NOT_FOUND__"],
+        )
+    if name == "security_malformed":
+        # Garbage from every security source: parsers must return None
+        # (UNKNOWN) and never crash the snapshot.
+        props = _strip_properties(
+            base["getprop"],
+            "ro.boot.verifiedbootstate",
+            "ro.boot.flash.locked",
+            "ro.boot.vbmeta.device_state",
+            "ro.boot.veritymode",
+            "ro.debuggable",
+            "ro.secure",
+            "ro.crypto.state",
+            "ro.crypto.type",
+            "ro.build.version.security_patch",
+        )
+        props = props + (
+            "[ro.boot.verifiedbootstate]: [blue]\n"
+            "[ro.boot.flash.locked]: [2]\n"
+            "[ro.boot.vbmeta.device_state]: [floating]\n"
+            "[ro.boot.veritymode]: [off]\n"
+            "[ro.debuggable]: [maybe]\n"
+            "[ro.secure]: []\n"
+            "[ro.crypto.state]: [encryptedish]\n"
+            "[ro.crypto.type]: [inline]\n"
+            "[ro.build.version.security_patch]: [2026-99-99]\n"
+        )
+        return {
+            **base,
+            "getprop": props,
+            "getenforce": "permissive-ish\n",
+            "id": "not an id at all\n",
+            "command -v su || echo __SU_NOT_FOUND__": "command -v: su: not found\n",
+        }
     raise KeyError(f"unknown scenario: {name}")
 
 
@@ -198,6 +285,15 @@ def _normal() -> dict[str, str]:
             "[ro.product.cpu.abi]: [arm64-v8a]\n"
             "[ro.product.cpu.abilist]: [arm64-v8a,armeabi-v7a,armeabi]\n"
             "[dalvik.vm.heapsize]: [256m]\n"
+            # -- Phase 2F: security posture properties (sanitized) ----------
+            "[ro.boot.verifiedbootstate]: [green]\n"
+            "[ro.boot.flash.locked]: [1]\n"
+            "[ro.boot.vbmeta.device_state]: [locked]\n"
+            "[ro.boot.veritymode]: [enforcing]\n"
+            "[ro.debuggable]: [0]\n"
+            "[ro.secure]: [1]\n"
+            "[ro.crypto.state]: [encrypted]\n"
+            "[ro.crypto.type]: [file]\n"
             "Usage: getprop [options]\n"
         ),
         "cat /proc/cpuinfo": (
@@ -311,6 +407,14 @@ def _normal() -> dict[str, str]:
             "  Active default network: 100\n"
         ),
         "dumpsys vpn": "VPN state: disconnected\n",
+        # -- Phase 2F: security posture command reads (read-only) -----------
+        "getenforce": "Enforcing\n",
+        "id": (
+            "uid=2000(shell) gid=2000(shell) groups=2000(shell),1004(input),"
+            "1007(log),1011(adb),1015(sdcard_rw),1028(sdcard_r),3001(net_bt_admin),"
+            "3002(net_bt),3003(inet),3006(net_bw_stats),3009(uhid),3011(readproc)\n"
+        ),
+        "command -v su || echo __SU_NOT_FOUND__": "__SU_NOT_FOUND__\n",
     }
 
 

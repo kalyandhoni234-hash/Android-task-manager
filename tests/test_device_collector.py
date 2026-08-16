@@ -9,7 +9,7 @@ a total failure (the first bulk getprop read) to the connection layer.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 from PySide6.QtWidgets import QApplication
@@ -874,3 +874,160 @@ def test_network_failure_messages_are_redacted_on_write(tmp_path, monkeypatch, c
     )
     content = (tmp_path / "logs" / "android-task-manager.log").read_text(encoding="utf-8")
     assert "aa:bb:cc:dd:ee:ff" not in content
+
+
+# ---------------------------------------------------------------------------
+# Phase 2F: security posture
+# ---------------------------------------------------------------------------
+
+
+def test_security_full_snapshot() -> None:
+    info = collect("normal")
+    assert info.selinux_status == "enforcing"
+    assert info.verified_boot_state == "green"
+    assert info.bootloader_locked is True
+    assert info.root_status == "NO_ROOT_EVIDENCE"
+    assert info.security_patch_date == date(2021, 6, 1)
+    assert info.debuggable is False
+    assert info.secure_build is True
+    assert info.encryption_state == "encrypted"
+    assert info.encryption_type == "file"
+    assert info.verity_mode == "enforcing"
+    assert info.security_patch == "2021-06-01"  # raw string untouched
+
+
+def test_security_permissive_scenario() -> None:
+    info = collect("security_permissive")
+    assert info.selinux_status == "permissive"
+    assert info.verified_boot_state == "green"
+    assert info.bootloader_locked is True
+    assert info.root_status == "NO_ROOT_EVIDENCE"
+    assert info.model == "V2026"  # rest of the snapshot intact
+
+
+def test_security_unlocked_scenario() -> None:
+    info = collect("security_unlocked")
+    assert info.verified_boot_state == "orange"
+    assert info.bootloader_locked is False
+    assert info.debuggable is True
+    assert info.secure_build is False
+    assert info.selinux_status == "enforcing"
+    assert info.root_status == "NO_ROOT_EVIDENCE"
+
+
+def test_security_root_evidence_scenario() -> None:
+    info = collect("security_root_evidence")
+    assert info.root_status == "ROOT_EVIDENCE"
+    assert info.selinux_status == "enforcing"
+    assert info.verified_boot_state == "green"
+    assert info.model == "V2026"
+
+
+def test_security_root_evidence_from_session_uid() -> None:
+    runner = fx.DeviceRunner(
+        {
+            **fx.scenario("normal"),
+            "id": "uid=0(root) gid=0(root) groups=0(root)\n",
+        }
+    )
+    info = DeviceInfoCollector(runner).sample()
+    assert info.root_status == "ROOT_EVIDENCE"
+
+
+def test_security_unknown_scenario_is_none_not_false() -> None:
+    info = collect("security_unknown")
+    assert info.selinux_status is None
+    assert info.verified_boot_state is None
+    assert info.bootloader_locked is None
+    assert info.root_status is None
+    assert info.security_patch_date is not None  # patch property still present
+    assert info.debuggable is None
+    assert info.secure_build is None
+    assert info.encryption_state is None
+    assert info.encryption_type is None
+    assert info.verity_mode is None
+    assert info.model == "V2026"  # snapshot survives total security failure
+
+
+def test_security_malformed_sources_do_not_abort() -> None:
+    info = collect("security_malformed")
+    assert info.selinux_status is None
+    assert info.verified_boot_state is None
+    assert info.bootloader_locked is None
+    assert info.root_status is None
+    assert info.security_patch_date is None
+    assert info.debuggable is None
+    assert info.secure_build is None
+    assert info.encryption_state is None
+    assert info.encryption_type is None
+    assert info.verity_mode is None
+    assert info.model == "V2026"
+    assert info.build_tags == "release-keys"
+
+
+def test_security_source_failure_degrades_field_by_field() -> None:
+    runner = fx.DeviceRunner(
+        fx.failing_commands(fx.scenario("normal"), ["getenforce"])
+    )
+    info = DeviceInfoCollector(runner).sample()
+    assert info.selinux_status is None
+    assert info.verified_boot_state == "green"
+    assert info.bootloader_locked is True
+    assert info.root_status == "NO_ROOT_EVIDENCE"
+    assert info.encryption_state == "encrypted"
+
+
+def test_security_bootloader_conflict_is_unknown() -> None:
+    runner = fx.DeviceRunner(
+        {
+            **fx.scenario("normal"),
+            "getprop": (
+                fx.scenario("normal")["getprop"]
+                .replace("[ro.boot.vbmeta.device_state]: [locked]", "")
+                + "[ro.boot.vbmeta.device_state]: [unlocked]\n"
+            ),
+        }
+    )
+    info = DeviceInfoCollector(runner).sample()
+    assert info.bootloader_locked is None  # contradictory evidence, UNKNOWN
+    assert info.verified_boot_state == "green"  # independent facts survive
+
+
+def test_security_patch_date_vendor_fallback() -> None:
+    props = fx.scenario("normal")["getprop"]
+    props = props.replace("[ro.build.version.security_patch]: [2021-06-01]", "")
+    runner = fx.DeviceRunner(
+        {
+            **fx.scenario("normal"),
+            "getprop": props
+            + "[ro.vendor.build.security_patch]: [2024-03-05]\n",
+        }
+    )
+    info = DeviceInfoCollector(runner).sample()
+    assert info.security_patch_date == date(2024, 3, 5)
+    assert info.security_patch == "2024-03-05"  # raw field shares the key chain
+
+
+def test_security_commands_issued_once_per_snapshot() -> None:
+    runner = fx.DeviceRunner(fx.scenario("normal"))
+    DeviceInfoCollector(runner).sample()
+    commands = [" ".join(call) for call in runner.calls]
+    assert commands.count("getprop") == 1  # bulk read reused for every property
+    assert commands.count("getenforce") == 1
+    assert commands.count("id") == 1
+    assert commands.count("command -v su || echo __SU_NOT_FOUND__") == 1
+    assert "su" not in [args[0] for args in runner.calls if args]  # never run su
+
+
+def test_security_no_credential_or_private_data_reads() -> None:
+    runner = fx.DeviceRunner(fx.scenario("normal"))
+    DeviceInfoCollector(runner).sample()
+    first_tokens = [args[0] for args in runner.calls if args]
+    assert "su" not in first_tokens  # su itself is never executed
+    assert "setenforce" not in first_tokens
+    assert "setprop" not in first_tokens
+    assert "chmod" not in first_tokens
+    assert "chown" not in first_tokens
+    assert "mount" not in first_tokens
+    assert "umount" not in first_tokens
+    assert "pm" not in first_tokens

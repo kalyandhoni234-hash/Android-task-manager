@@ -23,6 +23,7 @@ from ..adb.connection import CommandRunner
 from ..adb.exceptions import ADBError
 from .models import DeviceInformation, StorageInfo
 from .parser import (
+    SU_NOT_FOUND,
     collect_ipv4_addresses,
     collect_ipv6_addresses,
     derive_boot_time,
@@ -31,6 +32,7 @@ from .parser import (
     mark_default_route,
     parse_active_transport,
     parse_android_id,
+    parse_bootloader_locked,
     parse_charge_full_design,
     parse_connectivity_dns,
     parse_cpu_features,
@@ -41,6 +43,8 @@ from .parser import (
     parse_cpuinfo_model_name,
     parse_cycle_count,
     parse_df_k,
+    parse_encryption_state,
+    parse_encryption_type,
     parse_epoch_seconds,
     parse_getprop_output,
     parse_governor,
@@ -53,10 +57,16 @@ from .parser import (
     parse_orientation,
     parse_orientation_degrees,
     parse_proc_uptime,
+    parse_property_bool,
     parse_refresh_rate,
+    parse_root_status,
+    parse_security_patch_date,
+    parse_selinux_status,
     parse_supported_refresh_rates,
     parse_uname_a,
     parse_uname_a_machine,
+    parse_verified_boot_state,
+    parse_verity_mode,
     parse_vpn_state,
     parse_wifi_bssid,
     parse_wifi_connected,
@@ -239,6 +249,23 @@ class DeviceInfoCollector:
         vpn_active, vpn_interface = (
             parse_vpn_state(vpn_text) if vpn_text is not None else (None, None)
         )
+        # Security posture reads: three cheap read-only commands. Every
+        # property-based fact reuses the bulk ``getprop`` output already
+        # collected above — one getprop per snapshot, never one per key.
+        getenforce_text = self._read(
+            lambda: self._runner.shell(["getenforce"], timeout=self._timeout)
+        )
+        id_text = self._read(
+            lambda: self._runner.shell(["id"], timeout=self._timeout)
+        )
+        # Read-only ``su`` presence check: ``command -v`` is a shell
+        # builtin (always present) and the ``|| echo`` marker makes the
+        # result unambiguous — ``su`` itself is never executed.
+        su_text = self._read(
+            lambda: self._runner.shell(
+                [f"command -v su || echo {SU_NOT_FOUND}"], timeout=self._timeout
+            )
+        )
         if network_interfaces is not None:
             network_interfaces = mark_default_route(
                 network_interfaces, default_interface
@@ -381,6 +408,28 @@ class DeviceInfoCollector:
             ),
             vpn_active=vpn_active,
             vpn_interface=vpn_interface,
+            selinux_status=(
+                parse_selinux_status(getenforce_text)
+                if getenforce_text is not None
+                else None
+            ),
+            verified_boot_state=parse_verified_boot_state(
+                props.get("ro.boot.verifiedbootstate")
+            ),
+            bootloader_locked=parse_bootloader_locked(
+                props.get("ro.boot.flash.locked"),
+                props.get("ro.boot.vbmeta.device_state"),
+            ),
+            root_status=parse_root_status(id_text, su_text),
+            security_patch_date=parse_security_patch_date(
+                props.get("ro.build.version.security_patch")
+                or props.get("ro.vendor.build.security_patch")
+            ),
+            debuggable=parse_property_bool(props.get("ro.debuggable")),
+            secure_build=parse_property_bool(props.get("ro.secure")),
+            encryption_state=parse_encryption_state(props.get("ro.crypto.state")),
+            encryption_type=parse_encryption_type(props.get("ro.crypto.type")),
+            verity_mode=parse_verity_mode(props.get("ro.boot.veritymode")),
         )
 
     # ------------------------------------------------------------------

@@ -11,7 +11,7 @@ from __future__ import annotations
 import dataclasses
 import ipaddress
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from .models import NetworkInterfaceInfo, StorageInfo
 
@@ -1180,3 +1180,194 @@ def parse_vpn_state(text: str) -> tuple[bool | None, str | None]:
         return (False, None)
     iface_match = _VPN_INTERFACE_RE.search(text)
     return (True, iface_match.group(1) if iface_match is not None else None)
+
+
+# ---------------------------------------------------------------------------
+# Security posture (Phase 2F)
+# ---------------------------------------------------------------------------
+# Evidence-based facts only. None means UNKNOWN (missing, malformed or
+# contradictory evidence). Unknown is never collapsed into a positive or
+# negative claim: a failed ``getenforce`` read is NOT "disabled", and the
+# absence of root evidence is NOT "not rooted".
+#: Canonical SELinux mode tokens (``getenforce`` output, case-insensitive).
+_SELINUX_STATES = frozenset({"enforcing", "permissive", "disabled"})
+
+#: Canonical Android Verified Boot state tokens (``ro.boot.verifiedbootstate``).
+_VERIFIED_BOOT_STATES = frozenset({"green", "yellow", "orange", "red"})
+
+#: Canonical dm-verity mode tokens (``ro.boot.veritymode``).
+_VERITY_MODES = frozenset({"enforcing", "eio", "logging", "disabled"})
+
+#: Canonical encryption state tokens (``ro.crypto.state``).
+_ENCRYPTION_STATES = frozenset({"encrypted", "unencrypted"})
+
+#: Canonical encryption model tokens (``ro.crypto.type``).
+_ENCRYPTION_TYPES = frozenset({"file", "block"})
+
+#: Numeric/boolean property values accepted by :func:`parse_property_bool`.
+_BOOL_PROPERTY_VALUES = {
+    "1": True,
+    "0": False,
+    "true": True,
+    "false": False,
+}
+
+#: Marker printed by the collector's read-only ``su`` check when ``su`` is
+#: not on PATH; the command always exits 0 so the result is unambiguous.
+SU_NOT_FOUND = "__SU_NOT_FOUND__"
+
+#: Strict YYYY-MM-DD security patch level.
+_SECURITY_PATCH_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+
+_UID_RE = re.compile(r"\buid=(\d+)")
+
+
+def _normalize_token(value: str | None) -> str | None:
+    """Lowercase, strip, and collapse to None when empty."""
+    if value is None:
+        return None
+    token = value.strip().lower()
+    return token or None
+
+
+def parse_selinux_status(text: str | None) -> str | None:
+    """SELinux mode from ``getenforce`` output.
+
+    Returns the lowercase canonical token ("enforcing" / "permissive" /
+    "disabled") or None when the output is malformed. A failed or missing
+    read is None (UNKNOWN) — it is never interpreted as "disabled".
+    """
+    token = _normalize_token(text)
+    if token in _SELINUX_STATES:
+        return token
+    return None
+
+
+def parse_verified_boot_state(value: str | None) -> str | None:
+    """Android Verified Boot state from ``ro.boot.verifiedbootstate``.
+
+    Returns one of "green" / "yellow" / "orange" / "red" (Android's own
+    states) or None when the property is missing or malformed. This is one
+    security signal only — it is never converted into a "secure"/"rooted"
+    claim.
+    """
+    token = _normalize_token(value)
+    if token in _VERIFIED_BOOT_STATES:
+        return token
+    return None
+
+
+def parse_bootloader_locked(
+    flash_locked: str | None, vbmeta_state: str | None
+) -> bool | None:
+    """Bootloader lock state: True locked, False unlocked, None UNKNOWN.
+
+    ``ro.boot.flash.locked`` is the primary source ("1"/"0", or "true"/
+    "false" on some OEM builds); ``ro.boot.vbmeta.device_state``
+    ("locked"/"unlocked") corroborates it. When both sources are present
+    and disagree the result is None — contradictory evidence is UNKNOWN,
+    never resolved by guessing.
+    """
+    primary = None
+    if flash_locked is not None:
+        primary = _BOOL_PROPERTY_VALUES.get(flash_locked.strip().lower())
+    secondary = None
+    if vbmeta_state is not None:
+        token = vbmeta_state.strip().lower()
+        if token == "locked":
+            secondary = True
+        elif token == "unlocked":
+            secondary = False
+    if primary is not None and secondary is not None:
+        return primary if primary == secondary else None
+    if primary is not None:
+        return primary
+    return secondary
+
+
+def parse_root_status(id_text: str | None, su_text: str | None) -> str | None:
+    """Root evidence state: "ROOT_EVIDENCE" / "NO_ROOT_EVIDENCE" / None.
+
+    Evidence sources (read-only, never executing ``su`` itself):
+      * ``id`` — a session running as ``uid=0`` is direct root evidence.
+      * the ``su``-on-PATH check — a located executable path is root
+        evidence; the ``SU_NOT_FOUND`` marker alone documents absence of
+        evidence. Shell error text ("...: not found") is NOT a path and is
+        treated as ambiguous — it never becomes root evidence.
+
+    Returns None (UNKNOWN) when no source produced a usable result, or
+    when the evidence is otherwise ambiguous. "NO_ROOT_EVIDENCE" is only a
+    statement about evidence found — it never asserts the device is not
+    rooted.
+    """
+    result: str | None = None
+    if id_text is not None:
+        uid_match = _UID_RE.search(id_text)
+        if uid_match is not None:
+            if uid_match.group(1) == "0":
+                return "ROOT_EVIDENCE"
+            result = "NO_ROOT_EVIDENCE"
+    if su_text is not None:
+        token = su_text.strip()
+        if token and token != SU_NOT_FOUND:
+            if " " not in token or token.startswith("/"):
+                return "ROOT_EVIDENCE"
+        elif token == SU_NOT_FOUND:
+            result = "NO_ROOT_EVIDENCE"
+    return result
+
+
+def parse_security_patch_date(value: str | None) -> date | None:
+    """Security patch level as a validated date (strict YYYY-MM-DD).
+
+    Malformed values (bad format, impossible month/day) yield None; the
+    value is never repaired, guessed or converted into a security score.
+    """
+    if value is None:
+        return None
+    match = _SECURITY_PATCH_RE.match(value.strip())
+    if match is None:
+        return None
+    try:
+        return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    except ValueError:
+        return None
+
+
+def parse_property_bool(value: str | None) -> bool | None:
+    """Normalize a 0/1 or true/false build property; None when malformed.
+
+    Used for ``ro.debuggable`` and ``ro.secure``. A missing or malformed
+    property is None (UNKNOWN) — never guessed from the build type.
+    """
+    if value is None:
+        return None
+    return _BOOL_PROPERTY_VALUES.get(value.strip().lower())
+
+
+def parse_encryption_state(value: str | None) -> str | None:
+    """``ro.crypto.state``: "encrypted" / "unencrypted" / None (UNKNOWN)."""
+    token = _normalize_token(value)
+    if token in _ENCRYPTION_STATES:
+        return token
+    return None
+
+
+def parse_encryption_type(value: str | None) -> str | None:
+    """``ro.crypto.type``: "file" / "block" / None (UNKNOWN)."""
+    token = _normalize_token(value)
+    if token in _ENCRYPTION_TYPES:
+        return token
+    return None
+
+
+def parse_verity_mode(value: str | None) -> str | None:
+    """``ro.boot.veritymode``: enforcing / eio / logging / disabled / None.
+
+    One dm-verity signal; None (UNKNOWN) when missing or malformed. It is
+    never extended into a whole-device integrity verdict.
+    """
+    token = _normalize_token(value)
+    if token in _VERITY_MODES:
+        return token
+    return None

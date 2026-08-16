@@ -12,7 +12,7 @@ Device page from those snapshots.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 
 @dataclass(frozen=True)
@@ -253,3 +253,46 @@ class DeviceInformation:
     #: VPN tunnel interface name from ``dumpsys vpn`` (e.g. "tun0"), when
     #: the dump exposes it and a VPN is connected.
     vpn_interface: str | None = None
+
+    # -- Security posture (Phase 2F snapshot) --------------------------------
+    # NOTE: evidence-based facts only. ``None`` means UNKNOWN — evidence was
+    # missing, malformed or contradictory. Uncertainty is NEVER collapsed
+    # into a positive or negative security claim, and no security score is
+    # computed anywhere (a future posture engine consumes these raw facts).
+    #: SELinux mode from ``getenforce``: "enforcing" / "permissive" /
+    #: "disabled" — lowercase canonical tokens, None when UNKNOWN. A failed
+    #: read is UNKNOWN, never interpreted as "disabled".
+    selinux_status: str | None = None
+    #: Android Verified Boot state from ``ro.boot.verifiedbootstate``:
+    #: "green" / "yellow" / "orange" / "red", verbatim Android semantics,
+    #: None when UNKNOWN. One security signal only — never transformed into
+    #: "secure" or "rooted".
+    verified_boot_state: str | None = None
+    #: Bootloader lock state from ``ro.boot.flash.locked`` corroborated by
+    #: ``ro.boot.vbmeta.device_state``; True locked / False unlocked / None
+    #: when both sources conflict or are unavailable.
+    bootloader_locked: bool | None = None
+    #: Root evidence state: "ROOT_EVIDENCE" / "NO_ROOT_EVIDENCE" / None.
+    #: "NO_ROOT_EVIDENCE" means "no reliable root evidence was found" — it
+    #: does NOT mean the device is guaranteed not rooted. "ROOT_EVIDENCE"
+    #: means a root indicator was observed (session uid 0 or ``su`` on
+    #: PATH) — OEM debug stubs exist, so it is evidence, not a verdict.
+    root_status: str | None = None
+    #: Security patch level as a validated calendar date (YYYY-MM-DD) from
+    #: ``ro.build.version.security_patch``; malformed -> None. The raw
+    #: string remains in ``security_patch``; never turned into a score.
+    security_patch_date: date | None = None
+    #: ``ro.debuggable`` normalized (0/1 or true/false); None when malformed
+    #: or missing. Only a build configuration signal — never root evidence.
+    debuggable: bool | None = None
+    #: ``ro.secure`` normalized (0/1 or true/false); None when malformed or
+    #: missing. Only the adbd secure-mode property — never "fully secure".
+    secure_build: bool | None = None
+    #: ``ro.crypto.state``: "encrypted" / "unencrypted" / None (UNKNOWN).
+    encryption_state: str | None = None
+    #: ``ro.crypto.type``: "file" / "block" / None (UNKNOWN). Only the
+    #: device-reported model; never inferred from the Android version.
+    encryption_type: str | None = None
+    #: ``ro.boot.veritymode``: "enforcing" / "eio" / "logging" / "disabled"
+    #: / None (UNKNOWN). One signal — never a whole-device verdict.
+    verity_mode: str | None = None
