@@ -34,6 +34,35 @@ class StorageInfo:
 
 
 @dataclass(frozen=True)
+class NetworkInterfaceInfo:
+    """One discovered network interface (``ip addr`` snapshot).
+
+    Addresses keep their prefix (``192.168.50.10/24``) verbatim; the prefix
+    is preserved only when the device published a valid one — it is never
+    inferred. ``mac_address`` is ``None`` for loopback (no hardware address
+    to report) and for Android's ``02:00:00:00:00:00`` privacy placeholder.
+    """
+
+    #: Interface name, e.g. ``wlan0``. Never hardcoded into the collectors.
+    name: str
+    #: Classified interface type: "Wi-Fi" / "Ethernet" / "Cellular" /
+    #: "Loopback" / "VPN" / "Other". See the documented mapping in parser.py.
+    interface_type: str
+    #: Interface administrative/operational up state (``UP`` in the flags).
+    is_up: bool
+    #: True when this interface carries the default route (derived from
+    #: ``ip route``; False when no default route exists at all).
+    is_default_route: bool
+    #: Normalized hardware address (lowercase ``aa:bb:cc:dd:ee:ff``), or
+    #: None when unavailable/placeholder/loopback.
+    mac_address: str | None
+    #: IPv4 addresses with prefix, in source order.
+    ipv4_addresses: tuple[str, ...]
+    #: IPv6 addresses with prefix, in source order.
+    ipv6_addresses: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class DeviceInformation:
     """A structured snapshot of the connected device's identity.
 
@@ -174,3 +203,53 @@ class DeviceInformation:
     android_id: str | None = None
     wifi_mac: str | None = None
     bluetooth_mac: str | None = None
+
+    # -- Network configuration / connectivity (Phase 2E snapshot) ------------
+    # NOTE: this is a SNAPSHOT read once per connection session, not a live
+    # monitor. Live traffic counters/throughput are owned by the existing
+    # network monitor (``NetworkSnapshot``, sampled on its own timer) and are
+    # never duplicated here.
+    #: Every discovered interface from ``ip addr`` (loopback included),
+    #: in source order. ``None`` when the source is unavailable.
+    network_interfaces: tuple[NetworkInterfaceInfo, ...] | None = None
+    #: IPv4 addresses (without prefix) of non-loopback interfaces only.
+    #: Prefix information lives in ``network_interfaces``.
+    ipv4_addresses: tuple[str, ...] | None = None
+    #: IPv6 addresses (without prefix) of non-loopback interfaces only.
+    ipv6_addresses: tuple[str, ...] | None = None
+    #: Default-route gateway from ``ip route`` (e.g. "192.168.50.1");
+    #: None when there is no default route or the source is unavailable.
+    default_gateway: str | None = None
+    #: Interface carrying the default route (e.g. "wlan0"); never assumed —
+    #: the device decides (cellular, Ethernet, VPN are all possible).
+    default_interface: str | None = None
+    #: Default-route metric when Android published one (``metric N``).
+    default_route_metric: int | None = None
+    #: DNS servers of the active default network from ``dumpsys connectivity``.
+    dns_servers: tuple[str, ...] | None = None
+    #: Wi-Fi radio enabled/disabled state (``dumpsys wifi``).
+    wifi_enabled: bool | None = None
+    #: Wi-Fi connected to an access point (``dumpsys wifi`` network state).
+    wifi_connected: bool | None = None
+    #: Connected SSID (``dumpsys wifi``); None when Android redacts it —
+    #: that is correct behavior, never fabricated.
+    wifi_ssid: str | None = None
+    #: Connected access-point BSSID (``dumpsys wifi``); privacy-sensitive.
+    wifi_bssid: str | None = None
+    #: Wi-Fi frequency in MHz (e.g. 5180); never converted to a Wi-Fi
+    #: standard name.
+    wifi_frequency_mhz: int | None = None
+    #: Wi-Fi link speed in Mbps (e.g. 866.0) — the radio link rate, NOT an
+    #: internet speed measurement.
+    wifi_link_speed_mbps: float | None = None
+    #: Wi-Fi RSSI in dBm (e.g. -45); raw numeric value, never labeled
+    #: "Excellent"/"Good" — presentation belongs to the GUI.
+    wifi_rssi_dbm: int | None = None
+    #: Active default transport ("Wi-Fi"/"Cellular"/"Ethernet"/"VPN"/
+    #: "Bluetooth"/"Other") from ``dumpsys connectivity``.
+    active_transport: str | None = None
+    #: VPN state from ``dumpsys vpn`` (True when a VPN is connected).
+    vpn_active: bool | None = None
+    #: VPN tunnel interface name from ``dumpsys vpn`` (e.g. "tun0"), when
+    #: the dump exposes it and a VPN is connected.
+    vpn_interface: str | None = None

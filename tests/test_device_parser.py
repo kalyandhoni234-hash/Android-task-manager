@@ -13,11 +13,16 @@ import pytest
 
 from android_task_manager.device.models import StorageInfo
 from android_task_manager.device.parser import (
+    collect_ipv4_addresses,
+    collect_ipv6_addresses,
     derive_boot_time,
     derive_cpu_64bit,
     khz_to_hz,
+    mark_default_route,
+    parse_active_transport,
     parse_android_id,
     parse_charge_full_design,
+    parse_connectivity_dns,
     parse_cpu_features,
     parse_cpu_hardware_line,
     parse_cpu_range,
@@ -30,6 +35,8 @@ from android_task_manager.device.parser import (
     parse_getprop_output,
     parse_governor,
     parse_gpu_gles,
+    parse_ip_addr,
+    parse_ip_route,
     parse_mac_address,
     parse_max_frequency_khz,
     parse_mounts_filesystem,
@@ -40,6 +47,14 @@ from android_task_manager.device.parser import (
     parse_supported_refresh_rates,
     parse_uname_a,
     parse_uname_a_machine,
+    parse_vpn_state,
+    parse_wifi_bssid,
+    parse_wifi_connected,
+    parse_wifi_enabled,
+    parse_wifi_frequency,
+    parse_wifi_link_speed,
+    parse_wifi_rssi,
+    parse_wifi_ssid,
     parse_wm_density,
     parse_wm_override_density,
     parse_wm_override_size,
@@ -635,3 +650,598 @@ def test_cpu_features_missing_or_empty_is_none() -> None:
     assert parse_cpu_features("Hardware\t: qcom\n") is None
     assert parse_cpu_features("Features\t:  \n") is None
     assert parse_cpu_features("") is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 2E: network interfaces (ip addr)
+# ---------------------------------------------------------------------------
+
+_IP_ADDR_SAMPLE = (
+    "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN "
+    "group default qlen 1000\n"
+    "    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00\n"
+    "    inet 127.0.0.1/8 scope host lo\n"
+    "    inet6 ::1/128 scope host\n"
+    "2: wlan0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state "
+    "UP group default qlen 1000\n"
+    "    link/ether 3C:28:6D:AB:CD:EF brd ff:ff:ff:ff:ff:ff\n"
+    "    inet 192.168.50.10/24 brd 192.168.50.255 scope global wlan0\n"
+    "    inet6 fe80::3c28:6dff:feab:cdef/64 scope link\n"
+    "3: rmnet0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN "
+    "group default qlen 1000\n"
+    "    link/ether 92:e2:ba:10:81:77 brd ff:ff:ff:ff:ff:ff\n"
+)
+
+
+def test_ip_addr_parses_multiple_interfaces() -> None:
+    interfaces = parse_ip_addr(_IP_ADDR_SAMPLE)
+    assert interfaces is not None
+    assert [i.name for i in interfaces] == ["lo", "wlan0", "rmnet0"]
+
+
+def test_ip_addr_interface_types_classified() -> None:
+    interfaces = parse_ip_addr(_IP_ADDR_SAMPLE)
+    assert interfaces is not None
+    by_name = {i.name: i for i in interfaces}
+    assert by_name["lo"].interface_type == "Loopback"
+    assert by_name["wlan0"].interface_type == "Wi-Fi"
+    assert by_name["rmnet0"].interface_type == "Cellular"
+
+
+def test_ip_addr_up_state_from_flags() -> None:
+    interfaces = parse_ip_addr(_IP_ADDR_SAMPLE)
+    assert interfaces is not None
+    by_name = {i.name: i for i in interfaces}
+    assert by_name["lo"].is_up is True
+    assert by_name["wlan0"].is_up is True
+    assert by_name["rmnet0"].is_up is False
+
+
+def test_ip_addr_loopback_has_no_mac() -> None:
+    interfaces = parse_ip_addr(_IP_ADDR_SAMPLE)
+    assert interfaces is not None
+    assert interfaces[0].mac_address is None  # lo has no hardware address
+
+
+def test_ip_addr_mac_normalized_to_lowercase() -> None:
+    interfaces = parse_ip_addr(_IP_ADDR_SAMPLE)
+    assert interfaces is not None
+    wlan0 = interfaces[1]
+    assert wlan0.mac_address == "3c:28:6d:ab:cd:ef"
+    assert interfaces[2].mac_address == "92:e2:ba:10:81:77"
+
+
+def test_ip_addr_ipv4_addresses_with_prefix() -> None:
+    interfaces = parse_ip_addr(_IP_ADDR_SAMPLE)
+    assert interfaces is not None
+    assert interfaces[0].ipv4_addresses == ("127.0.0.1/8",)
+    assert interfaces[1].ipv4_addresses == ("192.168.50.10/24",)
+    assert interfaces[2].ipv4_addresses == ()
+
+
+def test_ip_addr_ipv6_addresses_with_prefix() -> None:
+    interfaces = parse_ip_addr(_IP_ADDR_SAMPLE)
+    assert interfaces is not None
+    assert interfaces[0].ipv6_addresses == ("::1/128",)
+    assert interfaces[1].ipv6_addresses == ("fe80::3c28:6dff:feab:cdef/64",)
+    assert interfaces[2].ipv6_addresses == ()
+
+
+def test_ip_addr_missing_is_none() -> None:
+    assert parse_ip_addr("") is None
+    assert parse_ip_addr("sh: ip: not found\n") is None
+    assert parse_ip_addr("  \n") is None
+
+
+def test_ip_addr_malformed_lines_skipped() -> None:
+    text = (
+        "garbage before any interface\n"
+        "2: wlan0: <UP> mtu 1500\n"
+        "    link/ether not-a-mac brd 00:00:00:00:00:00\n"
+        "    inet not-an-ip/24 scope global wlan0\n"
+        "    inet6 fe80::1/129 scope link\n"
+        "    inet 192.168.1.5/24 scope global wlan0\n"
+    )
+    interfaces = parse_ip_addr(text)
+    assert interfaces is not None
+    assert len(interfaces) == 1
+    wlan0 = interfaces[0]
+    assert wlan0.name == "wlan0"
+    assert wlan0.mac_address is None  # malformed MAC ignored
+    assert wlan0.ipv4_addresses == ("192.168.1.5/24",)  # valid line survives
+    assert wlan0.ipv6_addresses == ()  # /129 invalid for IPv6
+
+
+def test_ip_addr_placeholder_mac_is_none() -> None:
+    text = (
+        "2: wlan0: <UP> mtu 1500\n"
+        "    link/ether 02:00:00:00:00:00 brd ff:ff:ff:ff:ff:ff\n"
+    )
+    interfaces = parse_ip_addr(text)
+    assert interfaces is not None
+    assert interfaces[0].mac_address is None
+
+
+def test_ip_addr_unknown_interface_is_other() -> None:
+    text = "4: veth123: <UP> mtu 1500\n    link/ether aa:bb:cc:dd:ee:ff brd 00:00:00:00:00:00\n"
+    interfaces = parse_ip_addr(text)
+    assert interfaces is not None
+    assert interfaces[0].interface_type == "Other"
+
+
+def test_ip_addr_known_vpn_prefix_classified() -> None:
+    text = "4: tun0: <UP> mtu 1500\n    link/ether aa:bb:cc:dd:ee:ff brd 00:00:00:00:00:00\n"
+    interfaces = parse_ip_addr(text)
+    assert interfaces is not None
+    assert interfaces[0].interface_type == "VPN"
+
+
+def test_ip_addr_interface_without_address_lines() -> None:
+    text = "2: eth0: <UP> mtu 1500\n"
+    interfaces = parse_ip_addr(text)
+    assert interfaces is not None
+    assert interfaces[0].name == "eth0"
+    assert interfaces[0].interface_type == "Ethernet"
+    assert interfaces[0].ipv4_addresses == ()
+    assert interfaces[0].ipv6_addresses == ()
+
+
+def test_ip_addr_invalid_prefix_drops_address() -> None:
+    text = (
+        "2: wlan0: <UP> mtu 1500\n"
+        "    inet 192.168.1.5/33 scope global wlan0\n"
+        "    inet 192.168.1.6/abc scope global wlan0\n"
+        "    inet 192.168.1.7 scope global wlan0\n"
+    )
+    interfaces = parse_ip_addr(text)
+    assert interfaces is not None
+    # /33 and /abc are malformed; a bare valid address is accepted.
+    assert interfaces[0].ipv4_addresses == ("192.168.1.7",)
+
+
+def test_ip_addr_invalid_ipv4_dropped() -> None:
+    text = (
+        "2: wlan0: <UP> mtu 1500\n"
+        "    inet 999.1.1.1/24 scope global wlan0\n"
+        "    inet 10.0.0.2/24 scope global wlan0\n"
+    )
+    interfaces = parse_ip_addr(text)
+    assert interfaces is not None
+    assert interfaces[0].ipv4_addresses == ("10.0.0.2/24",)
+
+
+def test_ip_addr_multiple_ipv4_addresses_kept() -> None:
+    text = (
+        "2: eth0: <UP> mtu 1500\n"
+        "    inet 10.0.0.2/24 scope global eth0\n"
+        "    inet 10.0.0.3/24 scope global eth0\n"
+        "    inet6 fe80::1/64 scope link\n"
+        "    inet6 2001:db8::1/64 scope global\n"
+    )
+    interfaces = parse_ip_addr(text)
+    assert interfaces is not None
+    eth0 = interfaces[0]
+    assert eth0.ipv4_addresses == ("10.0.0.2/24", "10.0.0.3/24")
+    assert eth0.ipv6_addresses == ("fe80::1/64", "2001:db8::1/64")
+
+
+def test_mark_default_route_flags_matching_interface() -> None:
+    interfaces = parse_ip_addr(_IP_ADDR_SAMPLE)
+    assert interfaces is not None
+    marked = mark_default_route(interfaces, "wlan0")
+    by_name = {i.name: i for i in marked}
+    assert by_name["wlan0"].is_default_route is True
+    assert by_name["lo"].is_default_route is False
+    assert by_name["rmnet0"].is_default_route is False
+
+
+def test_mark_default_route_without_route_flags_none() -> None:
+    interfaces = parse_ip_addr(_IP_ADDR_SAMPLE)
+    assert interfaces is not None
+    marked = mark_default_route(interfaces, None)
+    assert all(i.is_default_route is False for i in marked)
+
+
+def test_collect_ipv4_excludes_loopback() -> None:
+    interfaces = parse_ip_addr(_IP_ADDR_SAMPLE)
+    assert interfaces is not None
+    assert collect_ipv4_addresses(interfaces) == ("192.168.50.10",)
+
+
+def test_collect_ipv6_excludes_loopback() -> None:
+    interfaces = parse_ip_addr(_IP_ADDR_SAMPLE)
+    assert interfaces is not None
+    assert collect_ipv6_addresses(interfaces) == ("fe80::3c28:6dff:feab:cdef",)
+
+
+def test_collect_addresses_missing_is_none() -> None:
+    assert collect_ipv4_addresses(()) is None
+    assert collect_ipv6_addresses(()) is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 2E: routes (ip route)
+# ---------------------------------------------------------------------------
+
+
+def test_ip_route_default_via() -> None:
+    assert parse_ip_route(
+        "default via 192.168.50.1 dev wlan0 proto static metric 10\n"
+    ) == ("192.168.50.1", "wlan0", 10)
+
+
+def test_ip_route_default_without_metric() -> None:
+    assert parse_ip_route("default via 192.168.50.1 dev wlan0\n") == (
+        "192.168.50.1",
+        "wlan0",
+        None,
+    )
+
+
+def test_ip_route_default_link_scope_no_gateway() -> None:
+    assert parse_ip_route("default dev tun0 scope link\n") == (None, "tun0", None)
+
+
+def test_ip_route_default_ipv6_gateway() -> None:
+    assert parse_ip_route("default via fe80::1 dev wlan0 metric 20\n") == (
+        "fe80::1",
+        "wlan0",
+        20,
+    )
+
+
+def test_ip_route_non_default_lines_ignored() -> None:
+    text = (
+        "192.168.50.0/24 dev wlan0 proto static scope link metric 10\n"
+        "default via 192.168.50.1 dev wlan0 proto static metric 10\n"
+    )
+    assert parse_ip_route(text) == ("192.168.50.1", "wlan0", 10)
+
+
+def test_ip_route_missing_is_none() -> None:
+    assert parse_ip_route("") is None
+    assert parse_ip_route("sh: ip: not found\n") is None
+    assert parse_ip_route("192.168.50.0/24 dev wlan0 proto static\n") is None
+
+
+def test_ip_route_malformed_gateway_ignored() -> None:
+    assert parse_ip_route("default via not-an-ip dev wlan0\n") is None
+    assert parse_ip_route("default via 999.1.1.1 dev wlan0\n") is None
+
+
+def test_ip_route_malformed_metric_is_none() -> None:
+    assert parse_ip_route("default via 192.168.50.1 dev wlan0 metric lots\n") == (
+        "192.168.50.1",
+        "wlan0",
+        None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2E: Wi-Fi state (dumpsys wifi)
+# ---------------------------------------------------------------------------
+
+_WIFI_CONNECTED = (
+    "Wi-Fi is enabled\n"
+    "mWifiInfo SSID: \"HomeWiFi\", BSSID: aa:bb:cc:dd:ee:ff, "
+    "MAC: 02:00:00:00:00:00, IP: 192.168.50.10/24, "
+    "Supplicant state: COMPLETED, Link speed: 866Mbps, "
+    "Frequency: 5180MHz, RSSI: -45\n"
+    "mNetworkInfo=NetworkInfo: type: WIFI[], state: CONNECTED/CONNECTED, "
+    "reason: (unspecified)\n"
+)
+
+
+def test_wifi_enabled() -> None:
+    assert parse_wifi_enabled("Wi-Fi is enabled\n") is True
+    assert parse_wifi_enabled("Wi-Fi is disabled\n") is False
+
+
+def test_wifi_enabled_fallback_token() -> None:
+    assert parse_wifi_enabled("mWifiEnabled=true\n") is True
+    assert parse_wifi_enabled("mWifiEnabled=false\n") is False
+
+
+def test_wifi_enabled_missing_is_none() -> None:
+    assert parse_wifi_enabled("") is None
+    assert parse_wifi_enabled("no state here\n") is None
+
+
+def test_wifi_connected_state() -> None:
+    assert parse_wifi_connected(_WIFI_CONNECTED) is True
+    assert parse_wifi_connected("NetworkInfo: type: WIFI[], state: DISCONNECTED/DISCONNECTED\n") is False
+
+
+def test_wifi_connected_intermediate_state_is_none() -> None:
+    assert (
+        parse_wifi_connected(
+            "NetworkInfo: type: WIFI[], state: CONNECTING/CONNECTING\n"
+        )
+        is None
+    )
+
+
+def test_wifi_connected_missing_is_none() -> None:
+    assert parse_wifi_connected("Wi-Fi is enabled\n") is None
+    assert parse_wifi_connected("") is None
+
+
+def test_wifi_connected_malformed_state_is_none() -> None:
+    assert parse_wifi_connected("mNetworkInfo=NetworkInfo: type: WIFI[], state: ???\n") is None
+
+
+def test_wifi_ssid_parsed() -> None:
+    assert parse_wifi_ssid(_WIFI_CONNECTED) == "HomeWiFi"
+
+
+def test_wifi_ssid_current_network_section() -> None:
+    text = "Current network info: SSID: \"OfficeNet\", BSSID: aa:bb:cc:dd:ee:ff\n"
+    assert parse_wifi_ssid(text) == "OfficeNet"
+
+
+def test_wifi_ssid_redacted_is_none() -> None:
+    text = "Wi-Fi is enabled\nmWifiInfo SSID: <ssid>, BSSID: aa:bb:cc:dd:ee:ff\n"
+    assert parse_wifi_ssid(text) is None
+
+
+def test_wifi_ssid_unknown_placeholder_is_none() -> None:
+    text = 'mWifiInfo SSID: "<unknown ssid>", BSSID: aa:bb:cc:dd:ee:ff\n'
+    assert parse_wifi_ssid(text) is None
+
+
+def test_wifi_ssid_empty_or_missing_is_none() -> None:
+    assert parse_wifi_ssid('mWifiInfo SSID: "", BSSID: aa:bb:cc:dd:ee:ff\n') is None
+    assert parse_wifi_ssid("Wi-Fi is enabled\n") is None
+    assert parse_wifi_ssid("") is None
+
+
+def test_wifi_ssid_scan_result_never_matches() -> None:
+    # Scan results are other networks and use their own section; the parser
+    # only reads the current-connection line.
+    text = (
+        "Scan results:\n"
+        "BSSID: aa:bb:cc:dd:ee:ff SSID: \"NeighborNet\", level: -70\n"
+    )
+    assert parse_wifi_ssid(text) is None
+
+
+def test_wifi_bssid_parsed_and_normalized() -> None:
+    assert parse_wifi_bssid(_WIFI_CONNECTED) == "aa:bb:cc:dd:ee:ff"
+    text = 'mWifiInfo SSID: "x", BSSID: AA:BB:CC:DD:EE:FF\n'
+    assert parse_wifi_bssid(text) == "aa:bb:cc:dd:ee:ff"
+
+
+def test_wifi_bssid_placeholder_or_malformed_is_none() -> None:
+    text = 'mWifiInfo SSID: "x", BSSID: 02:00:00:00:00:00\n'
+    assert parse_wifi_bssid(text) is None
+    assert parse_wifi_bssid('mWifiInfo SSID: "x", BSSID: broken\n') is None
+
+
+def test_wifi_bssid_missing_is_none() -> None:
+    assert parse_wifi_bssid("Wi-Fi is enabled\n") is None
+    assert parse_wifi_bssid("") is None
+
+
+def test_wifi_frequency_parsed() -> None:
+    assert parse_wifi_frequency(_WIFI_CONNECTED) == 5180
+    text = "Current network info: SSID: \"x\", Frequency: 2400MHz\n"
+    assert parse_wifi_frequency(text) == 2400
+
+
+def test_wifi_frequency_fallback_token() -> None:
+    assert parse_wifi_frequency("mFrequency=5180\n") == 5180
+
+
+def test_wifi_frequency_zero_negative_or_malformed_is_none() -> None:
+    assert parse_wifi_frequency("mWifiInfo SSID: \"x\", Frequency: 0MHz\n") is None
+    assert parse_wifi_frequency("mWifiInfo SSID: \"x\", Frequency: -5MHz\n") is None
+    assert parse_wifi_frequency("mFrequency=0\n") is None
+    assert parse_wifi_frequency("mFrequency=abc\n") is None
+
+
+def test_wifi_frequency_missing_is_none() -> None:
+    assert parse_wifi_frequency("Wi-Fi is enabled\n") is None
+    assert parse_wifi_frequency("") is None
+
+
+def test_wifi_frequency_scan_result_token_ignored() -> None:
+    # Scan results use lowercase "frequency:" — never the connected network.
+    text = 'Scan results:\nBSSID: aa:bb:cc:dd:ee:ff SSID: "x", frequency: 5180\n'
+    assert parse_wifi_frequency(text) is None
+
+
+def test_wifi_link_speed_parsed() -> None:
+    assert parse_wifi_link_speed(_WIFI_CONNECTED) == pytest.approx(866.0)
+    text = 'mWifiInfo SSID: "x", Link speed: 866Mbps, Frequency: 5180MHz\n'
+    assert parse_wifi_link_speed(text) == pytest.approx(866.0)
+
+
+def test_wifi_link_speed_fallback_token() -> None:
+    assert parse_wifi_link_speed("mLinkSpeed=144\n") == pytest.approx(144.0)
+
+
+def test_wifi_link_speed_zero_negative_or_malformed_is_none() -> None:
+    assert parse_wifi_link_speed('mWifiInfo SSID: "x", Link speed: 0Mbps\n') is None
+    assert parse_wifi_link_speed('mWifiInfo SSID: "x", Link speed: -3Mbps\n') is None
+    assert parse_wifi_link_speed("mLinkSpeed=abc\n") is None
+
+
+def test_wifi_link_speed_missing_is_none() -> None:
+    assert parse_wifi_link_speed("Wi-Fi is enabled\n") is None
+    assert parse_wifi_link_speed("") is None
+
+
+def test_wifi_rssi_parsed_negative() -> None:
+    assert parse_wifi_rssi(_WIFI_CONNECTED) == -45
+    text = 'mWifiInfo SSID: "x", RSSI: -67\n'
+    assert parse_wifi_rssi(text) == -67
+
+
+def test_wifi_rssi_fallback_token() -> None:
+    assert parse_wifi_rssi("mRssi=-45\n") == -45
+
+
+def test_wifi_rssi_out_of_range_or_malformed_is_none() -> None:
+    assert parse_wifi_rssi('mWifiInfo SSID: "x", RSSI: +5\n') is None
+    assert parse_wifi_rssi('mWifiInfo SSID: "x", RSSI: -200\n') is None
+    assert parse_wifi_rssi("mRssi=abc\n") is None
+
+
+def test_wifi_rssi_missing_is_none() -> None:
+    assert parse_wifi_rssi("Wi-Fi is enabled\n") is None
+    assert parse_wifi_rssi("") is None
+
+
+def test_wifi_rssi_scan_result_token_ignored() -> None:
+    # Scan results report "level:" — the current-network RSSI is separate.
+    text = 'Scan results:\nBSSID: aa:bb:cc:dd:ee:ff SSID: "x", level: -70\n'
+    assert parse_wifi_rssi(text) is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 2E: connectivity (dumpsys connectivity)
+# ---------------------------------------------------------------------------
+
+_CONNECTIVITY_BLOCK = (
+    "ConnectivityService state:\n"
+    "  NetworkAgentInfos:\n"
+    "    100 NetworkAgentInfo{ [WIFI () - 100]  id=100, uptimeMs=86400000 }\n"
+    "      LinkProperties: {InterfaceName: wlan0 "
+    "LinkAddresses: [ 192.168.50.10/24 ] "
+    "DnsAddresses: [ 192.168.50.1, 9.9.9.9 ] MTU: 1500 "
+    "Routes: [ 0.0.0.0/0 -> 192.168.50.1 wlan0 ]}\n"
+    "  Active default network: 100\n"
+)
+
+
+def test_active_transport_bare_id_form() -> None:
+    assert parse_active_transport(_CONNECTIVITY_BLOCK) == "Wi-Fi"
+
+
+def test_active_transport_inline_form() -> None:
+    text = (
+        "  Active default network: NetworkAgentInfo{ [CELLULAR () - 42] "
+        "id=42, linkProperties=[{}]}\n"
+    )
+    assert parse_active_transport(text) == "Cellular"
+
+
+def test_active_transport_ethernet_and_vpn_tokens() -> None:
+    assert (
+        parse_active_transport(
+            "Active default network: NetworkAgentInfo{ [ETHERNET () - 1] }\n"
+        )
+        == "Ethernet"
+    )
+    assert (
+        parse_active_transport(
+            "Active default network: NetworkAgentInfo{ [VPN () - 2] }\n"
+        )
+        == "VPN"
+    )
+
+
+def test_active_transport_unknown_token_is_other() -> None:
+    assert (
+        parse_active_transport(
+            "Active default network: NetworkAgentInfo{ [UNKNOWNX () - 3] }\n"
+        )
+        == "Other"
+    )
+
+
+def test_active_transport_null_or_missing_is_none() -> None:
+    assert parse_active_transport("Active default network: null\n") is None
+    assert parse_active_transport("ConnectivityService state:\n") is None
+    assert parse_active_transport("") is None
+
+
+def test_connectivity_dns_bare_id_form() -> None:
+    assert parse_connectivity_dns(_CONNECTIVITY_BLOCK) == (
+        "192.168.50.1",
+        "9.9.9.9",
+    )
+
+
+def test_connectivity_dns_inline_form() -> None:
+    text = (
+        "Active default network: NetworkAgentInfo{ [WIFI () - 100] "
+        "linkProperties=[{InterfaceName: wlan0 "
+        "DnsAddresses: [ 192.168.50.1, 8.8.8.8 ] Routes: [ ] }] }\n"
+    )
+    assert parse_connectivity_dns(text) == ("192.168.50.1", "8.8.8.8")
+
+
+def test_connectivity_dns_alternate_token_names() -> None:
+    text = (
+        "Active default network: NetworkAgentInfo{ [WIFI () - 100] "
+        "linkProperties=[{DnsServers: [ 192.168.50.1 ]}] }\n"
+    )
+    assert parse_connectivity_dns(text) == ("192.168.50.1",)
+    text = (
+        "Active default network: NetworkAgentInfo{ [WIFI () - 100] "
+        "linkProperties=[{DNS servers: [ 192.168.50.1 ]}] }\n"
+    )
+    assert parse_connectivity_dns(text) == ("192.168.50.1",)
+
+
+def test_connectivity_dns_malformed_entries_dropped() -> None:
+    text = (
+        "Active default network: NetworkAgentInfo{ [WIFI () - 100] "
+        "linkProperties=[{DnsAddresses: [ 192.168.50.1, not-an-ip, 999.1.1.1 ]}] }\n"
+    )
+    assert parse_connectivity_dns(text) == ("192.168.50.1",)
+
+
+def test_connectivity_dns_missing_is_none() -> None:
+    assert parse_connectivity_dns("Active default network: null\n") is None
+    assert parse_connectivity_dns("ConnectivityService state:\n") is None
+    assert parse_connectivity_dns("") is None
+
+
+def test_connectivity_dns_wrong_network_ignored() -> None:
+    # DNS is only reported for the ACTIVE network, never a secondary one.
+    text = (
+        "ConnectivityService state:\n"
+        "  100 NetworkAgentInfo{ [WIFI () - 100]  id=100 }\n"
+        "      LinkProperties: {InterfaceName: wlan0 "
+        "DnsAddresses: [ 192.168.50.1 ]}\n"
+        "  101 NetworkAgentInfo{ [VPN () - 101]  id=101 }\n"
+        "      LinkProperties: {InterfaceName: tun0 "
+        "DnsAddresses: [ 10.0.0.1 ]}\n"
+        "  Active default network: 101\n"
+    )
+    assert parse_connectivity_dns(text) == ("10.0.0.1",)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2E: VPN (dumpsys vpn)
+# ---------------------------------------------------------------------------
+
+
+def test_vpn_state_disconnected() -> None:
+    assert parse_vpn_state("VPN state: disconnected\n") == (False, None)
+
+
+def test_vpn_state_connected_with_interface() -> None:
+    text = (
+        "VPN state: connected\n"
+        "VPN connected: {\n"
+        "  interface: tun0\n"
+        "  source: com.example.vpn\n"
+        "}\n"
+    )
+    assert parse_vpn_state(text) == (True, "tun0")
+
+
+def test_vpn_state_connected_without_interface() -> None:
+    assert parse_vpn_state("VPN state: connected\n") == (True, None)
+
+
+def test_vpn_state_case_insensitive() -> None:
+    assert parse_vpn_state("Vpn state: connected\n") == (True, None)
+
+
+def test_vpn_state_unavailable() -> None:
+    assert parse_vpn_state("") == (None, None)
+    assert parse_vpn_state("dumpsys: unknown service vpn\n") == (None, None)

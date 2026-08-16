@@ -8,6 +8,7 @@ a total failure (the first bulk getprop read) to the connection layer.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 import pytest
@@ -605,3 +606,271 @@ def test_monitor_emits_sparse_information_when_properties_absent(qtapp) -> None:
     assert len(received) == 1
     assert received[0].model is None
     assert received[0].manufacturer == "vivo"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2E: network intelligence
+# ---------------------------------------------------------------------------
+
+
+def test_network_full_snapshot() -> None:
+    info = collect("normal")
+    assert info.network_interfaces is not None
+    by_name = {i.name: i for i in info.network_interfaces}
+    assert by_name["lo"].interface_type == "Loopback"
+    assert by_name["wlan0"].interface_type == "Wi-Fi"
+    assert by_name["wlan0"].is_up is True
+    assert by_name["wlan0"].is_default_route is True
+    assert by_name["wlan0"].mac_address == "3c:28:6d:ab:cd:ef"
+    assert by_name["wlan0"].ipv4_addresses == ("192.168.50.10/24",)
+    assert by_name["wlan0"].ipv6_addresses == ("fe80::3c28:6dff:feab:cdef/64",)
+    assert by_name["rmnet0"].is_default_route is False
+    assert by_name["lo"].is_default_route is False
+    assert info.ipv4_addresses == ("192.168.50.10",)  # loopback excluded
+    assert info.ipv6_addresses == ("fe80::3c28:6dff:feab:cdef",)
+    assert info.default_gateway == "192.168.50.1"
+    assert info.default_interface == "wlan0"
+    assert info.default_route_metric == 10
+    assert info.dns_servers == ("192.168.50.1", "9.9.9.9")
+    assert info.wifi_enabled is True
+    assert info.wifi_connected is True
+    assert info.wifi_ssid == "HomeWiFi"
+    assert info.wifi_bssid == "aa:bb:cc:dd:ee:ff"
+    assert info.wifi_frequency_mhz == 5180
+    assert info.wifi_link_speed_mbps == pytest.approx(866.0)
+    assert info.wifi_rssi_dbm == -45
+    assert info.active_transport == "Wi-Fi"
+    assert info.vpn_active is False
+    assert info.vpn_interface is None
+
+
+def test_network_wifi_unavailable_partial_snapshot() -> None:
+    info = collect("network_partial")
+    assert info.wifi_enabled is None
+    assert info.wifi_connected is None
+    assert info.wifi_ssid is None
+    assert info.wifi_bssid is None
+    assert info.wifi_frequency_mhz is None
+    assert info.wifi_link_speed_mbps is None
+    assert info.wifi_rssi_dbm is None
+    assert info.network_interfaces is not None  # ip addr survives
+    assert info.default_gateway == "192.168.50.1"  # ip route survives
+    assert info.dns_servers == ("192.168.50.1", "9.9.9.9")  # connectivity survives
+    assert info.vpn_active is False  # dumpsys vpn survives
+    assert info.model == "V2026"
+
+
+def test_network_ip_source_failure_survives() -> None:
+    runner = fx.DeviceRunner(
+        fx.failing_commands(fx.scenario("normal"), ["ip addr"])
+    )
+    info = DeviceInfoCollector(runner).sample()
+    assert info.network_interfaces is None
+    assert info.ipv4_addresses is None
+    assert info.ipv6_addresses is None
+    assert info.default_gateway == "192.168.50.1"  # independent read survives
+    assert info.wifi_enabled is True
+    assert info.vpn_active is False
+    assert info.model == "V2026"
+
+
+def test_network_route_source_failure_survives() -> None:
+    runner = fx.DeviceRunner(
+        fx.failing_commands(fx.scenario("normal"), ["ip route"])
+    )
+    info = DeviceInfoCollector(runner).sample()
+    assert info.default_gateway is None
+    assert info.default_interface is None
+    assert info.default_route_metric is None
+    assert info.network_interfaces is not None
+    assert all(i.is_default_route is False for i in info.network_interfaces)
+    assert info.wifi_enabled is True
+    assert info.model == "V2026"
+
+
+def test_network_connectivity_source_failure_survives() -> None:
+    runner = fx.DeviceRunner(
+        fx.failing_commands(fx.scenario("normal"), ["dumpsys connectivity"])
+    )
+    info = DeviceInfoCollector(runner).sample()
+    assert info.active_transport is None
+    assert info.dns_servers is None
+    assert info.network_interfaces is not None
+    assert info.default_gateway == "192.168.50.1"
+    assert info.wifi_enabled is True
+    assert info.model == "V2026"
+
+
+def test_network_vpn_source_failure_survives() -> None:
+    runner = fx.DeviceRunner(fx.failing_commands(fx.scenario("normal"), ["dumpsys vpn"]))
+    info = DeviceInfoCollector(runner).sample()
+    assert info.vpn_active is None
+    assert info.vpn_interface is None
+    assert info.wifi_enabled is True
+    assert info.active_transport == "Wi-Fi"
+    assert info.model == "V2026"
+
+
+def test_network_all_sources_failure_snapshot_survives() -> None:
+    info = collect("network_unavailable")
+    assert info.network_interfaces is None
+    assert info.ipv4_addresses is None
+    assert info.ipv6_addresses is None
+    assert info.default_gateway is None
+    assert info.default_interface is None
+    assert info.default_route_metric is None
+    assert info.dns_servers is None
+    assert info.wifi_enabled is None
+    assert info.wifi_connected is None
+    assert info.wifi_ssid is None
+    assert info.wifi_bssid is None
+    assert info.wifi_frequency_mhz is None
+    assert info.wifi_link_speed_mbps is None
+    assert info.wifi_rssi_dbm is None
+    assert info.active_transport is None
+    assert info.vpn_active is None
+    assert info.vpn_interface is None
+    # Phases 2A-2D fields remain intact.
+    assert info.model == "V2026"
+    assert info.manufacturer == "vivo"
+    assert info.cpu_core_count == 8
+    assert info.resolution == "1080x2340"
+    assert info.gpu_vendor == "Qualcomm"
+    assert info.storage is not None
+    assert info.battery_design_capacity == 4880000
+    assert info.wifi_mac == "3c:28:6d:ab:cd:ef"  # Phase 2A identifier intact
+
+
+def test_network_malformed_sources_do_not_abort() -> None:
+    runner = fx.DeviceRunner(
+        {
+            **fx.scenario("normal"),
+            "ip addr": "sh: ip: not found\n",
+            "ip route": "garbage\n",
+            "dumpsys wifi": "Exception occurred while dumping:\n",
+            "dumpsys connectivity": "ERROR: failed\n",
+            "dumpsys vpn": "",
+        }
+    )
+    info = DeviceInfoCollector(runner).sample()
+    assert info.network_interfaces is None
+    assert info.default_gateway is None
+    assert info.wifi_enabled is None
+    assert info.active_transport is None
+    assert info.vpn_active is None
+    assert info.model == "V2026"
+    assert info.cpu_core_count == 8
+
+
+def test_network_redacted_ssid_reported_none() -> None:
+    info = collect("network_redacted")
+    assert info.wifi_ssid is None  # Android redaction is reported honestly
+    assert info.wifi_bssid is None  # placeholder BSSID excluded
+    assert info.wifi_enabled is True
+    assert info.wifi_connected is True
+    assert info.wifi_link_speed_mbps == pytest.approx(866.0)
+    assert info.wifi_frequency_mhz == 5180
+
+
+def test_network_wifi_disconnected_state() -> None:
+    runner = fx.DeviceRunner(
+        {
+            **fx.scenario("normal"),
+            "dumpsys wifi": (
+                "Wi-Fi is enabled\n"
+                "mWifiInfo SSID: null, BSSID: 02:00:00:00:00:00, "
+                "Supplicant state: DISCONNECTED, Link speed: 0Mbps\n"
+                "mNetworkInfo=NetworkInfo: type: WIFI[], "
+                "state: DISCONNECTED/DISCONNECTED, reason: (unspecified)\n"
+            ),
+        }
+    )
+    info = DeviceInfoCollector(runner).sample()
+    assert info.wifi_enabled is True
+    assert info.wifi_connected is False
+    assert info.wifi_ssid is None
+    assert info.wifi_bssid is None
+    assert info.wifi_link_speed_mbps is None
+
+
+def test_network_vpn_connected_state() -> None:
+    runner = fx.DeviceRunner(
+        {
+            **fx.scenario("normal"),
+            "dumpsys vpn": (
+                "VPN state: connected\n"
+                "VPN connected: {\n"
+                "  interface: tun0\n"
+                "  source: com.example.vpn\n"
+                "}\n"
+            ),
+        }
+    )
+    info = DeviceInfoCollector(runner).sample()
+    assert info.vpn_active is True
+    assert info.vpn_interface == "tun0"
+    assert info.active_transport == "Wi-Fi"  # default network still Wi-Fi
+
+
+def test_network_inline_connectivity_format() -> None:
+    runner = fx.DeviceRunner(
+        {
+            **fx.scenario("normal"),
+            "dumpsys connectivity": (
+                "Active default network: NetworkAgentInfo{ [CELLULAR () - 42] "
+                "id=42, linkProperties=[{InterfaceName: rmnet0 "
+                "DnsAddresses: [ 10.20.30.1 ] Routes: [ ] }] }\n"
+            ),
+        }
+    )
+    info = DeviceInfoCollector(runner).sample()
+    assert info.active_transport == "Cellular"
+    assert info.dns_servers == ("10.20.30.1",)
+    assert info.wifi_enabled is True  # independent source intact
+
+
+def test_network_commands_issued_once_per_snapshot() -> None:
+    runner = fx.DeviceRunner(fx.scenario("normal"))
+    DeviceInfoCollector(runner).sample()
+    commands = [" ".join(call) for call in runner.calls]
+    assert commands.count("ip addr") == 1
+    assert commands.count("ip route") == 1
+    assert commands.count("dumpsys wifi") == 1
+    assert commands.count("dumpsys connectivity") == 1
+    assert commands.count("dumpsys vpn") == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 2E: privacy — network identifiers never reach diagnostic logging
+# ---------------------------------------------------------------------------
+
+
+def test_network_failure_logs_no_sensitive_identifiers(caplog) -> None:
+    """Failed network reads must not surface MAC/BSSID/SSID/IP in logs."""
+    runner = fx.DeviceRunner(
+        {
+            **fx.scenario("normal"),
+            "dumpsys wifi": "BSSID: aa:bb:cc:dd:ee:ff SSID: \"HomeWiFi\" broken\n",
+        }
+    )
+    with caplog.at_level("DEBUG"):
+        DeviceInfoCollector(runner).sample()
+    text = "\n".join(record.getMessage() for record in caplog.records)
+    assert "aa:bb:cc:dd:ee:ff" not in text
+    assert "HomeWiFi" not in text
+    assert "3c:28:6d:ab:cd:ef" not in text
+    assert "192.168.50.10" not in text
+
+
+def test_network_failure_messages_are_redacted_on_write(tmp_path, monkeypatch, caplog) -> None:
+    """Even if an ADB failure text reached the log pipeline, the existing
+    RedactingFormatter scrubs MAC/BSSID shapes before writing the file."""
+    from android_task_manager.core.diagnostics import setup_logging
+
+    monkeypatch.setenv("ATMAN_LOG_DIR", str(tmp_path / "logs"))
+    setup_logging(level=logging.DEBUG)
+    logging.getLogger("android_task_manager").warning(
+        "wifi read failed: BSSID aa:bb:cc:dd:ee:ff dropped"
+    )
+    content = (tmp_path / "logs" / "android-task-manager.log").read_text(encoding="utf-8")
+    assert "aa:bb:cc:dd:ee:ff" not in content

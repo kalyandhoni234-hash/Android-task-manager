@@ -1,10 +1,13 @@
 """Shared fixture factories for the device-information tests.
 
 Provides representative raw ADB outputs (bulk ``getprop``, ``wm``, ``df``,
-``dumpsys``, sysfs reads) for the scenarios the spec requires — a normal
-modern device, missing/partial/empty properties, an older Android device,
-and unavailable display/identifier data — plus a CommandRunner fake that
-serves them without any device.
+``dumpsys``, ``ip``, sysfs reads) for the scenarios the spec requires — a
+normal modern device, missing/partial/empty properties, an older Android
+device, and unavailable display/identifier/network data — plus a
+CommandRunner fake that serves them without any device.
+
+All network identifiers are sanitized fiction: no real SSID, BSSID, MAC or
+personally-identifiable address appears in any fixture.
 """
 
 from __future__ import annotations
@@ -101,6 +104,37 @@ def scenario(name: str) -> dict[str, str]:
         }
     if name == "storage_unavailable":
         return {**base, "df -k /data": "df: /data: Permission denied\n"}
+    if name == "network_partial":
+        # Wi-Fi dump unavailable; interface, route, connectivity and VPN
+        # sources still deliver their share of the snapshot.
+        return {**base, "dumpsys wifi": "FAILURE"}
+    if name == "network_unavailable":
+        # Every Phase 2E source is gone; the rest of the snapshot survives.
+        return failing_commands(
+            base,
+            [
+                "ip addr",
+                "ip route",
+                "dumpsys wifi",
+                "dumpsys connectivity",
+                "dumpsys vpn",
+            ],
+        )
+    if name == "network_redacted":
+        # Android 8+ redacts the connected SSID (prints "<ssid>") and the
+        # device hides the BSSID; enabled/connected state still reports.
+        return {
+            **base,
+            "dumpsys wifi": (
+                "Wi-Fi is enabled\n"
+                "mWifiInfo SSID: <ssid>, BSSID: 02:00:00:00:00:00, "
+                "MAC: 02:00:00:00:00:00, IP: 192.168.50.10/24, "
+                "Supplicant state: COMPLETED, Link speed: 866Mbps, "
+                "Frequency: 5180MHz\n"
+                "mNetworkInfo=NetworkInfo: type: WIFI[], state: CONNECTED/CONNECTED, "
+                "reason: (unspecified)\n"
+            ),
+        }
     raise KeyError(f"unknown scenario: {name}")
 
 
@@ -230,6 +264,53 @@ def _normal() -> dict[str, str]:
         "settings get secure android_id": "a1b2c3d4e5f60718\n",
         "cat /sys/class/net/wlan0/address": "3c:28:6d:ab:cd:ef\n",
         "settings get secure bluetooth_address": "aa:bb:cc:dd:ee:ff\n",
+        # -- Phase 2E: network configuration / connectivity (sanitized) ------
+        "ip addr": (
+            "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN "
+            "group default qlen 1000\n"
+            "    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00\n"
+            "    inet 127.0.0.1/8 scope host lo\n"
+            "    valid_lft forever preferred_lft forever\n"
+            "    inet6 ::1/128 scope host\n"
+            "    valid_lft forever preferred_lft forever\n"
+            "2: wlan0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state "
+            "UP group default qlen 1000\n"
+            "    link/ether 3c:28:6d:ab:cd:ef brd ff:ff:ff:ff:ff:ff\n"
+            "    inet 192.168.50.10/24 brd 192.168.50.255 scope global wlan0\n"
+            "    valid_lft forever preferred_lft forever\n"
+            "    inet6 fe80::3c28:6dff:feab:cdef/64 scope link\n"
+            "    valid_lft forever preferred_lft forever\n"
+            "3: rmnet0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN "
+            "group default qlen 1000\n"
+            "    link/ether 92:e2:ba:10:81:77 brd ff:ff:ff:ff:ff:ff\n"
+        ),
+        "ip route": (
+            "default via 192.168.50.1 dev wlan0 proto static metric 10\n"
+            "192.168.50.0/24 dev wlan0 proto static scope link metric 10\n"
+        ),
+        "dumpsys wifi": (
+            "Wi-Fi is enabled\n"
+            "mWifiInfo SSID: \"HomeWiFi\", BSSID: aa:bb:cc:dd:ee:ff, "
+            "MAC: 02:00:00:00:00:00, IP: 192.168.50.10/24, "
+            "Supplicant state: COMPLETED, Link speed: 866Mbps, "
+            "Frequency: 5180MHz, RSSI: -45\n"
+            "mNetworkInfo=NetworkInfo: type: WIFI[], state: CONNECTED/CONNECTED, "
+            "reason: (unspecified)\n"
+        ),
+        "dumpsys connectivity": (
+            "ConnectivityService state:\n"
+            "  NetworkAgentInfos:\n"
+            "    100 NetworkAgentInfo{ [WIFI () - 100]  id=100, "
+            "uptimeMs=86400000, networkMonitor=NetworkMonitorAgentInfo{} }\n"
+            "      requested by: [android, com.android.settings]\n"
+            "      LinkProperties: {InterfaceName: wlan0 "
+            "LinkAddresses: [ 192.168.50.10/24 ] "
+            "DnsAddresses: [ 192.168.50.1, 9.9.9.9 ] Domains: null "
+            "MTU: 1500 Routes: [ 192.168.50.0/24 -> 0.0.0.0 wlan0, "
+            "0.0.0.0/0 -> 192.168.50.1 wlan0 ]}\n"
+            "  Active default network: 100\n"
+        ),
+        "dumpsys vpn": "VPN state: disconnected\n",
     }
 
 

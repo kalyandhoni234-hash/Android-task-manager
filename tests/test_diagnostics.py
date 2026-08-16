@@ -126,6 +126,14 @@ def test_redact_mac_addresses() -> None:
     assert "00:1b:44:11:3a:b7" not in redact("wlan mac 00:1b:44:11:3a:b7")
 
 
+def test_redact_bssid_shapes() -> None:
+    # A BSSID is a MAC address; the same shape must be scrubbed wherever it
+    # could enter a log line (e.g. a Wi-Fi dump failure message).
+    assert "aa:bb:cc:dd:ee:ff" not in redact("wifi dump failed, BSSID aa:bb:cc:dd:ee:ff")
+    assert "bssid=00:1b:44:11:3a:b7" not in redact("bssid=00:1b:44:11:3a:b7")
+    assert "aa:bb:cc:dd:ee:ff" not in redact("SSID: HomeWiFi, BSSID: aa:bb:cc:dd:ee:ff")
+
+
 def test_redact_registered_secrets() -> None:
     register_secret("FAKE-SERIAL-123")
     assert "FAKE-SERIAL-123" not in redact("device FAKE-SERIAL-123 connected")

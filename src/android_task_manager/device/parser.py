@@ -8,10 +8,12 @@ rest of the device page.
 
 from __future__ import annotations
 
+import dataclasses
+import ipaddress
 import re
 from datetime import datetime, timezone
 
-from .models import StorageInfo
+from .models import NetworkInterfaceInfo, StorageInfo
 
 #: The address Android reports when a MAC is not available (privacy
 #: placeholder since Android 6): a real 12-hex-digit address, all zeros.
@@ -579,3 +581,602 @@ def parse_cpuinfo_model_name(text: str) -> str | None:
             value = line.split(":", 1)[1].strip()
             return value or None
     return None
+
+
+# ---------------------------------------------------------------------------
+# Network configuration: ip addr / ip route
+# ---------------------------------------------------------------------------
+# SNAPSHOT data: interface identity, type, MAC, addresses, prefixes and the
+# default route are read once per connection session. Live traffic counters
+# and throughput are owned by the network monitor package — never here.
+
+#: Interface header: ``2: wlan0: <FLAGS> mtu ...``. The name token follows the
+#: index and colon; flags are inside the angle brackets. ``UP`` in the flags
+#: is the universal up indicator (the ``state`` token is newer and absent on
+#: some builds, so it is never required).
+_INTERFACE_HEADER_RE = re.compile(r"^\s*\d+:\s+(\S+):\s+<(.*?)>")
+#: Address line: ``inet 192.168.50.10/24 brd ...`` / ``inet6 fe80::/64 scope``.
+_INET_RE = re.compile(r"^\s*inet\s+(\S+)")
+_INET6_RE = re.compile(r"^\s*inet6\s+(\S+)")
+#: MAC line: ``link/ether 3c:28:6d:ab:cd:ef brd ...`` (loopback is
+#: ``link/loopback 00:00:00:00:00:00``).
+_LINK_RE = re.compile(r"^\s*link/\S+\s+([0-9A-Fa-f:]+)")
+
+#: Documented interface-type classification (fallback when the link layer
+#: does not decide). Only well-known prefixes are mapped; anything else is
+#: honestly reported as "Other" instead of being guessed.
+_INTERFACE_TYPE_BY_PREFIX: tuple[tuple[str, str], ...] = (
+    ("wlan", "Wi-Fi"),
+    ("wifi", "Wi-Fi"),
+    ("rmnet", "Cellular"),
+    ("ccmni", "Cellular"),
+    ("pdp", "Cellular"),
+    ("wwan", "Cellular"),
+    ("eth", "Ethernet"),
+    ("en", "Ethernet"),
+    ("tun", "VPN"),
+    ("tap", "VPN"),
+    ("ppp", "VPN"),
+    ("wg", "VPN"),
+)
+
+
+def _classify_interface(name: str, link_type: str) -> str:
+    """Interface type: link layer first, documented name mapping as fallback.
+
+    ``link/loopback`` decides Loopback regardless of the name. Ethernet-type
+    links are classified by the documented name-prefix mapping above; a name
+    that matches nothing is reported as "Other" — never a guess.
+    """
+    if link_type == "loopback" or name == "lo":
+        return "Loopback"
+    lowered = name.lower()
+    for prefix, kind in _INTERFACE_TYPE_BY_PREFIX:
+        if lowered.startswith(prefix):
+            return kind
+    return "Other"
+
+
+def _split_address(token: str) -> tuple[str, int | None] | None:
+    """``addr/prefix`` -> (addr, prefix); a bare valid address keeps None.
+
+    The prefix is preserved only when the device published a valid one
+    (0-32 for IPv4, 0-128 for IPv6); an invalid prefix makes the whole
+    token malformed -> None, and no subnet mask is ever inferred.
+    """
+    address, sep, prefix_text = token.partition("/")
+    try:
+        parsed = ipaddress.ip_address(address)
+    except ValueError:
+        return None
+    if not sep:
+        return address, None
+    try:
+        prefix = int(prefix_text)
+    except ValueError:
+        return None
+    if parsed.version == 4:
+        if not 0 <= prefix <= 32:
+            return None
+    elif not 0 <= prefix <= 128:
+        return None
+    return address, prefix
+
+
+def parse_ip_addr(text: str) -> tuple[NetworkInterfaceInfo, ...] | None:
+    """Parse ``ip addr`` output into one ``NetworkInterfaceInfo`` per block.
+
+    Each interface block is ``<index>: <name>: <flags> mtu ...`` followed by
+    indented ``link/``, ``inet`` and ``inet6`` lines. Blocks are kept in
+    source order; a block whose header does not match, malformed address
+    tokens and unreadable MAC lines are skipped rather than failing the
+    parse. No header at all -> None (the source is unusable).
+    """
+    interfaces: list[NetworkInterfaceInfo] = []
+    current: NetworkInterfaceInfo | None = None
+    for raw in text.splitlines():
+        header = _INTERFACE_HEADER_RE.match(raw)
+        if header is not None:
+            if current is not None:
+                interfaces.append(current)
+            name, flags = header.group(1), header.group(2)
+            current = NetworkInterfaceInfo(
+                name=name,
+                interface_type=_classify_interface(name, ""),
+                is_up="UP" in flags,
+                is_default_route=False,
+                mac_address=None,
+                ipv4_addresses=(),
+                ipv6_addresses=(),
+            )
+            continue
+        if current is None:
+            continue
+        link = _LINK_RE.match(raw)
+        if link is not None:
+            address = link.group(1).lower()
+            if (
+                current.interface_type != "Loopback"
+                and address != _MAC_PLACEHOLDER
+            ):
+                current = _replace_interface(current, mac_address=address)
+            continue
+        inet6 = _INET6_RE.match(raw)
+        if inet6 is not None:
+            parsed = _split_address(inet6.group(1))
+            if parsed is not None:
+                current = _replace_interface(
+                    current,
+                    ipv6_addresses=current.ipv6_addresses
+                    + (_cidr(parsed[0], parsed[1]),),
+                )
+            continue
+        inet = _INET_RE.match(raw)
+        if inet is not None:
+            parsed = _split_address(inet.group(1))
+            if parsed is not None:
+                current = _replace_interface(
+                    current,
+                    ipv4_addresses=current.ipv4_addresses
+                    + (_cidr(parsed[0], parsed[1]),),
+                )
+    if current is not None:
+        interfaces.append(current)
+    return tuple(interfaces) or None
+
+
+def _replace_interface(
+    current: NetworkInterfaceInfo, **changes
+) -> NetworkInterfaceInfo:
+    """Rebuild a frozen interface with ``changes`` applied (small helper)."""
+    return dataclasses.replace(current, **changes)
+
+
+def _cidr(address: str, prefix: int | None) -> str:
+    """``(address, prefix)`` -> ``"address/prefix"`` (bare when no prefix)."""
+    return address if prefix is None else f"{address}/{prefix}"
+
+
+def mark_default_route(
+    interfaces: tuple[NetworkInterfaceInfo, ...], default_interface: str | None
+) -> tuple[NetworkInterfaceInfo, ...]:
+    """Flag the interface that carries the default route, if any.
+
+    The default interface comes from ``ip route`` — it is never assumed to
+    be ``wlan0``. When there is no default route at all, every interface is
+    flagged False.
+    """
+    if default_interface is None:
+        return tuple(
+            _replace_interface(iface, is_default_route=False) for iface in interfaces
+        )
+    return tuple(
+        _replace_interface(
+            iface, is_default_route=(iface.name == default_interface)
+        )
+        for iface in interfaces
+    )
+
+
+def collect_ipv4_addresses(
+    interfaces: tuple[NetworkInterfaceInfo, ...],
+) -> tuple[str, ...] | None:
+    """IPv4 addresses (prefix stripped) of non-loopback interfaces only.
+
+    Loopback (127.0.0.1) is not a network address and is kept out of the
+    convenience list; the interface model still carries it structurally.
+    """
+    addresses = [
+        _strip_prefix(cidr)
+        for iface in interfaces
+        if iface.interface_type != "Loopback"
+        for cidr in iface.ipv4_addresses
+    ]
+    return tuple(addresses) or None
+
+
+def collect_ipv6_addresses(
+    interfaces: tuple[NetworkInterfaceInfo, ...],
+) -> tuple[str, ...] | None:
+    """IPv6 addresses (prefix stripped) of non-loopback interfaces only."""
+    addresses = [
+        _strip_prefix(cidr)
+        for iface in interfaces
+        if iface.interface_type != "Loopback"
+        for cidr in iface.ipv6_addresses
+    ]
+    return tuple(addresses) or None
+
+
+def _strip_prefix(cidr: str) -> str:
+    return cidr.partition("/")[0]
+
+
+#: ``default via <gateway> dev <iface> [proto X] [metric N]`` — or, for
+#: link-scope defaults (typical of VPNs), ``default dev <iface>``.
+_DEFAULT_ROUTE_RE = re.compile(
+    r"^\s*default\s+(?:via\s+(\S+)\s+)?dev\s+(\S+)(?:.*\bmetric\s+(\d+))?"
+)
+
+
+def parse_ip_route(text: str) -> tuple[str | None, str | None, int | None] | None:
+    """The default route from ``ip route`` as (gateway, interface, metric).
+
+    Only a line whose first token is ``default`` is considered; non-default
+    routes are ignored. The gateway must be a valid IP address — one is
+    never inferred from anything else. No parseable default route -> None.
+    """
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or not line.startswith("default"):
+            continue
+        match = _DEFAULT_ROUTE_RE.match(line)
+        if match is None:
+            continue
+        gateway_text = match.group(1)
+        interface = match.group(2).strip() or None
+        gateway: str | None = None
+        if gateway_text is not None:
+            try:
+                ipaddress.ip_address(gateway_text)
+            except ValueError:
+                continue
+            gateway = gateway_text
+        metric: int | None = None
+        if match.group(3) is not None:
+            try:
+                metric = int(match.group(3))
+            except ValueError:
+                metric = None
+        return gateway, interface, metric
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Wi-Fi state (dumpsys wifi): SNAPSHOT of a POTENTIALLY DYNAMIC state
+# ---------------------------------------------------------------------------
+# Collected once per connection session; continuous Wi-Fi monitoring would
+# belong to the network monitor package in a later phase, not here.
+#
+# ``dumpsys wifi`` prints the current connection two ways across Android
+# versions: an ``mWifiInfo ...`` line (older) or a ``Current network info:``
+# section (newer). Scan results use lowercase ``frequency:``/``level:``
+# tokens and are NOT the connected network, so the current-connection line
+# is the only source for SSID/BSSID/link speed/frequency/RSSI. When Android
+# redacts the SSID it prints ``<ssid>`` — reported as None, never guessed.
+
+_WIFI_STATE_RE = re.compile(r"(?i)Wi-Fi is (enabled|disabled)\b")
+_WIFI_ENABLED_TOKEN_RE = re.compile(r"(?i)mWifiEnabled\s*=\s*(true|false)\b")
+_WIFI_NETWORK_STATE_RE = re.compile(r"state:\s*([A-Z]+)")
+_WIFI_CONNECTED_STATES = frozenset({"CONNECTED"})
+_WIFI_DISCONNECTED_STATES = frozenset({"DISCONNECTED"})
+#: The connected-network info line: ``mWifiInfo SSID: ...`` or
+#: ``Current network info: SSID: ...`` — whichever comes first wins.
+_CURRENT_WIFI_LINE_RE = re.compile(
+    r"^(?:mWifiInfo|Current network info:)(.*)$"
+)
+_SSID_QUOTED_RE = re.compile(r'SSID:\s*"([^"]*)"')
+_SSID_REDACTED_RE = re.compile(r"SSID:\s*<[^>]*>")
+_BSSID_RE = re.compile(r"BSSID:\s*([0-9A-Fa-f:]+)")
+_FREQUENCY_RE = re.compile(r"Frequency:\s*(\d+)\s*(?:MHz)?")
+_FREQUENCY_TOKEN_RE = re.compile(r"mFrequency\s*=\s*(\d+)")
+_LINK_SPEED_RE = re.compile(r"Link speed:\s*([0-9.]+)\s*Mbps")
+_LINK_SPEED_TOKEN_RE = re.compile(r"mLinkSpeed\s*=\s*([0-9.]+)")
+_RSSI_RE = re.compile(r"RSSI:\s*(-?\d+)")
+_RSSI_TOKEN_RE = re.compile(r"mRssi\s*=\s*(-?\d+)")
+#: Plausible RSSI range in dBm; anything outside is treated as malformed.
+_RSSI_MIN = -150
+_RSSI_MAX = 0
+
+
+def _current_wifi_info_line(text: str) -> str | None:
+    """The current-connection info line of ``dumpsys wifi``, or None."""
+    for raw in text.splitlines():
+        match = _CURRENT_WIFI_LINE_RE.match(raw.strip())
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def parse_wifi_enabled(text: str) -> bool | None:
+    """Wi-Fi radio state from ``dumpsys wifi`` (enabled/disabled).
+
+    ``Wi-Fi is enabled`` / ``Wi-Fi is disabled`` lines are canonical;
+    ``mWifiEnabled=true|false`` is the fallback for older builds. Neither
+    token present -> None.
+    """
+    match = _WIFI_STATE_RE.search(text)
+    if match is not None:
+        return match.group(1).lower() == "enabled"
+    match = _WIFI_ENABLED_TOKEN_RE.search(text)
+    if match is not None:
+        return match.group(1).lower() == "true"
+    return None
+
+
+def parse_wifi_connected(text: str) -> bool | None:
+    """Connected-to-AP state from the WIFI network state of ``dumpsys wifi``.
+
+    Only the state of the WIFI network is considered (``type: WIFI`` lines
+    are not required to match — the state token is the same shape across
+    versions). CONNECTED -> True, DISCONNECTED -> False; intermediate
+    states (CONNECTING, ...) and absent tokens -> None.
+    """
+    for raw in text.splitlines():
+        line = raw.strip()
+        if "type: WIFI" not in line and "NetworkInfo:" not in line:
+            continue
+        match = _WIFI_NETWORK_STATE_RE.search(line)
+        if match is None:
+            continue
+        state = match.group(1).upper()
+        if state in _WIFI_CONNECTED_STATES:
+            return True
+        if state in _WIFI_DISCONNECTED_STATES:
+            return False
+    return None
+
+
+def parse_wifi_ssid(text: str) -> str | None:
+    """The connected SSID from the current-connection line of ``dumpsys wifi``.
+
+    A quoted name is unquoted; empty, ``<ssid>`` (Android's redaction
+    placeholder), ``"<unknown ssid>"`` and absent values -> None. The SSID
+    is never inferred from anything else.
+    """
+    line = _current_wifi_info_line(text)
+    if line is None:
+        return None
+    if _SSID_REDACTED_RE.search(line) is not None:
+        return None
+    match = _SSID_QUOTED_RE.search(line)
+    if match is None:
+        return None
+    value = match.group(1).strip()
+    if not value or value.startswith("<") and value.endswith(">"):
+        return None
+    return value
+
+
+def parse_wifi_bssid(text: str) -> str | None:
+    """The connected BSSID from ``dumpsys wifi``, normalized as a MAC.
+
+    Reuses ``parse_mac_address``: the ``02:00:00:00:00:00`` placeholder and
+    malformed values -> None. Privacy-sensitive; never logged raw.
+    """
+    line = _current_wifi_info_line(text)
+    if line is None:
+        return None
+    match = _BSSID_RE.search(line)
+    if match is None:
+        return None
+    return parse_mac_address(match.group(1))
+
+
+def parse_wifi_frequency(text: str) -> int | None:
+    """Wi-Fi frequency in MHz from ``dumpsys wifi``; positive int, else None.
+
+    ``Frequency: 5180MHz`` on the current-connection line is canonical;
+    ``mFrequency=5180`` is the fallback. Zero, negative and malformed -> None;
+    the value is never converted into a Wi-Fi standard name.
+    """
+    line = _current_wifi_info_line(text)
+    if line is not None:
+        match = _FREQUENCY_RE.search(line)
+        if match is not None:
+            try:
+                value = int(match.group(1))
+            except ValueError:
+                value = -1
+            return value if value > 0 else None
+    match = _FREQUENCY_TOKEN_RE.search(text)
+    if match is not None:
+        try:
+            value = int(match.group(1))
+        except ValueError:
+            value = -1
+        return value if value > 0 else None
+    return None
+
+
+def parse_wifi_link_speed(text: str) -> float | None:
+    """Wi-Fi link speed in Mbps from ``dumpsys wifi``; positive, else None.
+
+    ``Link speed: 866Mbps`` on the current-connection line is canonical;
+    ``mLinkSpeed=866`` is the fallback. This is the radio link rate — NOT
+    an internet speed measurement. Zero/negative/malformed -> None.
+    """
+    line = _current_wifi_info_line(text)
+    if line is not None:
+        match = _LINK_SPEED_RE.search(line)
+        if match is not None:
+            try:
+                value = float(match.group(1))
+            except ValueError:
+                value = -1.0
+            return value if value > 0 else None
+    match = _LINK_SPEED_TOKEN_RE.search(text)
+    if match is not None:
+        try:
+            value = float(match.group(1))
+        except ValueError:
+            value = -1.0
+        return value if value > 0 else None
+    return None
+
+
+def parse_wifi_rssi(text: str) -> int | None:
+    """Wi-Fi RSSI in dBm from ``dumpsys wifi``; raw numeric value.
+
+    ``RSSI: -45`` on the current-connection line is canonical; ``mRssi=-45``
+    is the fallback. Values outside the plausible dBm range (-150..0) are
+    malformed -> None. The value is never converted to "Excellent"/"Good" —
+    presentation belongs to the GUI.
+    """
+    line = _current_wifi_info_line(text)
+    candidates: list[int] = []
+    if line is not None:
+        match = _RSSI_RE.search(line)
+        if match is not None:
+            try:
+                candidates.append(int(match.group(1)))
+            except ValueError:
+                pass
+    match = _RSSI_TOKEN_RE.search(text)
+    if match is not None:
+        try:
+            candidates.append(int(match.group(1)))
+        except ValueError:
+            pass
+    for value in candidates:
+        if _RSSI_MIN <= value <= _RSSI_MAX:
+            return value
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Connectivity (dumpsys connectivity): active transport + DNS
+# ---------------------------------------------------------------------------
+# Also a once-per-session SNAPSHOT of a dynamic state.
+
+#: Transport token -> human label. Tokens not listed map to "Other".
+_TRANSPORT_LABELS = {
+    "WIFI": "Wi-Fi",
+    "CELLULAR": "Cellular",
+    "ETHERNET": "Ethernet",
+    "VPN": "VPN",
+    "BLUETOOTH": "Bluetooth",
+    "WIFI_AWARE": "Wi-Fi Aware",
+    "LOWPAN": "Low-PAN",
+}
+_ACTIVE_NETWORK_RE = re.compile(r"^\s*Active default network:\s*(.*)$")
+#: Inline form (Android 12+): ``NetworkAgentInfo{ [WIFI () - 100] ...``.
+_INLINE_NETWORK_RE = re.compile(r"\[([A-Z_]+) \(\) - (\d+)\]")
+_BARE_NETWORK_ID_RE = re.compile(r"(\d+)\s*$")
+#: Block header form (Android 11 and older): ``100 NetworkAgentInfo{ [WIFI () - 100]``.
+_BLOCK_HEADER_RE = re.compile(r"NetworkAgentInfo\{\s*\[([A-Z_]+) \(\) - (\d+)\]")
+#: DNS lists inside LinkProperties; token names vary across Android versions.
+_DNS_LIST_RES = (
+    re.compile(r"DnsAddresses:\s*\[([^\]]*)\]"),
+    re.compile(r"DnsServers:\s*\[([^\]]*)\]"),
+    re.compile(r"DNS servers:\s*\[([^\]]*)\]"),
+)
+
+
+def parse_active_transport(text: str) -> str | None:
+    """The active default transport label from ``dumpsys connectivity``.
+
+    Both known formats are handled: the inline ``NetworkAgentInfo{ [WIFI () - 100]``
+    form and the bare ``Active default network: 100`` form whose transport is
+    read from the matching ``NetworkAgentInfo`` block header. ``null``/missing
+    -> None; an unrecognized transport token -> "Other".
+    """
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line.startswith("Active default network:"):
+            continue
+        rest = line[len("Active default network:") :].strip()
+        inline = _INLINE_NETWORK_RE.search(rest)
+        if inline is not None:
+            return _TRANSPORT_LABELS.get(inline.group(1), "Other")
+        if rest.lower() == "null":
+            return None
+        bare = _BARE_NETWORK_ID_RE.search(rest)
+        if bare is None:
+            return None
+        network_id = bare.group(1)
+        for block_raw in text.splitlines():
+            block = _BLOCK_HEADER_RE.search(block_raw)
+            if block is not None and block.group(2) == network_id:
+                return _TRANSPORT_LABELS.get(block.group(1), "Other")
+        return None
+    return None
+
+
+def parse_connectivity_dns(text: str) -> tuple[str, ...] | None:
+    """DNS servers of the active default network from ``dumpsys connectivity``.
+
+    With the inline active-network form, the DNS list is read from that same
+    line; with the bare-id form, from the ``LinkProperties`` block of the
+    matching network (ending at the next ``NetworkAgentInfo`` header). Every
+    entry must be a valid IP address — malformed entries are dropped and an
+    all-malformed/absent list -> None. DNS is never reported unless the
+    source clearly establishes it.
+    """
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line.startswith("Active default network:"):
+            continue
+        rest = line[len("Active default network:") :].strip()
+        inline = _INLINE_NETWORK_RE.search(rest)
+        if inline is not None:
+            return _parse_dns_list(rest)
+        if rest.lower() == "null":
+            return None
+        bare = _BARE_NETWORK_ID_RE.search(rest)
+        if bare is None:
+            return None
+        network_id = bare.group(1)
+        lines = text.splitlines()
+        for index, block_raw in enumerate(lines):
+            block = _BLOCK_HEADER_RE.search(block_raw)
+            if block is None or block.group(2) != network_id:
+                continue
+            for following in lines[index + 1 :]:
+                if _BLOCK_HEADER_RE.search(following) is not None:
+                    break
+                dns = _parse_dns_list(following)
+                if dns is not None:
+                    return dns
+            return None
+        return None
+    return None
+
+
+def _parse_dns_list(text: str) -> tuple[str, ...] | None:
+    """The first valid DNS list in *text*; malformed entries are dropped."""
+    for pattern in _DNS_LIST_RES:
+        match = pattern.search(text)
+        if match is None:
+            continue
+        servers: list[str] = []
+        for entry in match.group(1).split(","):
+            candidate = entry.strip()
+            if not candidate:
+                continue
+            try:
+                ipaddress.ip_address(candidate)
+            except ValueError:
+                continue
+            servers.append(candidate)
+        return tuple(servers) or None
+    return None
+
+
+# ---------------------------------------------------------------------------
+# VPN (dumpsys vpn)
+# ---------------------------------------------------------------------------
+# The VpnManagerService dump is the authoritative VPN state source: it
+# prints ``VPN state: connected|disconnected`` (case-insensitive). The
+# interface name is read from the ``interface:`` line inside the connected
+# block — this is the ONLY place a VPN interface is derived from, never
+# from the interface name alone.
+
+_VPN_STATE_RE = re.compile(r"(?im)^\s*vpn state:\s*(connected|disconnected)\b")
+_VPN_INTERFACE_RE = re.compile(r"(?im)^\s*interface:\s*(\S+)")
+
+
+def parse_vpn_state(text: str) -> tuple[bool | None, str | None]:
+    """VPN state as (active, interface) from ``dumpsys vpn``.
+
+    ``(True, iface)`` when a VPN is connected (interface may be None if the
+    dump does not expose it), ``(False, None)`` when explicitly disconnected,
+    ``(None, None)`` when the state is not exposed at all.
+    """
+    match = _VPN_STATE_RE.search(text)
+    if match is None:
+        return (None, None)
+    if match.group(1).lower() != "connected":
+        return (False, None)
+    iface_match = _VPN_INTERFACE_RE.search(text)
+    return (True, iface_match.group(1) if iface_match is not None else None)

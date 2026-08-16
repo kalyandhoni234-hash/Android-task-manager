@@ -23,11 +23,16 @@ from ..adb.connection import CommandRunner
 from ..adb.exceptions import ADBError
 from .models import DeviceInformation, StorageInfo
 from .parser import (
+    collect_ipv4_addresses,
+    collect_ipv6_addresses,
     derive_boot_time,
     derive_cpu_64bit,
     khz_to_hz,
+    mark_default_route,
+    parse_active_transport,
     parse_android_id,
     parse_charge_full_design,
+    parse_connectivity_dns,
     parse_cpu_features,
     parse_cpu_hardware_line,
     parse_cpu_range,
@@ -40,6 +45,8 @@ from .parser import (
     parse_getprop_output,
     parse_governor,
     parse_gpu_gles,
+    parse_ip_addr,
+    parse_ip_route,
     parse_mac_address,
     parse_max_frequency_khz,
     parse_mounts_filesystem,
@@ -50,6 +57,14 @@ from .parser import (
     parse_supported_refresh_rates,
     parse_uname_a,
     parse_uname_a_machine,
+    parse_vpn_state,
+    parse_wifi_bssid,
+    parse_wifi_connected,
+    parse_wifi_enabled,
+    parse_wifi_frequency,
+    parse_wifi_link_speed,
+    parse_wifi_rssi,
+    parse_wifi_ssid,
     parse_wm_density,
     parse_wm_override_density,
     parse_wm_override_size,
@@ -111,6 +126,11 @@ _PROPERTY_KEYS = {
 #:                       data belongs to the live battery monitor.
 #:     storage_filesystem
 #:                    <- cat /proc/mounts (fs type of the /data mount).
+#:     network facts  <- ip addr / ip route / dumpsys wifi / dumpsys
+#:                       connectivity / dumpsys vpn — five commands, one per
+#:                       snapshot (collect once, parse many). SNAPSHOT data;
+#:                       live traffic counters/throughput belong to the
+#:                       network monitor package, never here.
 
 
 class DeviceInfoCollector:
@@ -192,6 +212,37 @@ class DeviceInfoCollector:
             if mounts_text is not None
             else None
         )
+        network_interfaces = self._read(
+            lambda: parse_ip_addr(
+                self._runner.shell(["ip", "addr"], timeout=self._timeout)
+            )
+        )
+        default_route = self._read(
+            lambda: parse_ip_route(
+                self._runner.shell(["ip", "route"], timeout=self._timeout)
+            )
+        )
+        default_gateway, default_interface, default_route_metric = (
+            default_route if default_route is not None else (None, None, None)
+        )
+        wifi_text = self._read(
+            lambda: self._runner.shell(["dumpsys", "wifi"], timeout=self._timeout)
+        )
+        connectivity_text = self._read(
+            lambda: self._runner.shell(
+                ["dumpsys", "connectivity"], timeout=self._timeout
+            )
+        )
+        vpn_text = self._read(
+            lambda: self._runner.shell(["dumpsys", "vpn"], timeout=self._timeout)
+        )
+        vpn_active, vpn_interface = (
+            parse_vpn_state(vpn_text) if vpn_text is not None else (None, None)
+        )
+        if network_interfaces is not None:
+            network_interfaces = mark_default_route(
+                network_interfaces, default_interface
+            )
         return DeviceInformation(
             **_property_fields(props),
             soc=_soc_name(props),
@@ -287,6 +338,49 @@ class DeviceInfoCollector:
                     )
                 )
             ),
+            network_interfaces=network_interfaces,
+            ipv4_addresses=(
+                collect_ipv4_addresses(network_interfaces)
+                if network_interfaces is not None
+                else None
+            ),
+            ipv6_addresses=(
+                collect_ipv6_addresses(network_interfaces)
+                if network_interfaces is not None
+                else None
+            ),
+            default_gateway=default_gateway,
+            default_interface=default_interface,
+            default_route_metric=default_route_metric,
+            dns_servers=(
+                parse_connectivity_dns(connectivity_text)
+                if connectivity_text is not None
+                else None
+            ),
+            wifi_enabled=(
+                parse_wifi_enabled(wifi_text) if wifi_text is not None else None
+            ),
+            wifi_connected=(
+                parse_wifi_connected(wifi_text) if wifi_text is not None else None
+            ),
+            wifi_ssid=parse_wifi_ssid(wifi_text) if wifi_text is not None else None,
+            wifi_bssid=parse_wifi_bssid(wifi_text) if wifi_text is not None else None,
+            wifi_frequency_mhz=(
+                parse_wifi_frequency(wifi_text) if wifi_text is not None else None
+            ),
+            wifi_link_speed_mbps=(
+                parse_wifi_link_speed(wifi_text) if wifi_text is not None else None
+            ),
+            wifi_rssi_dbm=(
+                parse_wifi_rssi(wifi_text) if wifi_text is not None else None
+            ),
+            active_transport=(
+                parse_active_transport(connectivity_text)
+                if connectivity_text is not None
+                else None
+            ),
+            vpn_active=vpn_active,
+            vpn_interface=vpn_interface,
         )
 
     # ------------------------------------------------------------------
