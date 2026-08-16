@@ -124,3 +124,65 @@ def test_execute_hides_console_for_windows_child_processes(monkeypatch) -> None:
 
     # stdout/stderr must stay captured (pipes) regardless of the flag.
     assert fake.call_kwargs[0]["capture_output"] is True
+
+
+class _DecodingFakeRun:
+    """Mimics subprocess's text-mode decode with the requested codec.
+
+    Real ``subprocess.run(..., text=True, encoding=..., errors=...)`` decodes
+    the captured bytes with those exact parameters; the fake applies the
+    same contract so the tests prove what the call site passes and that
+    malformed device bytes cannot escape as UnicodeDecodeError.
+    """
+
+    def __init__(self, stdout: bytes, stderr: bytes = b"") -> None:
+        self.kwargs: dict | None = None
+        self.stdout_bytes = stdout
+        self.stderr_bytes = stderr
+
+    def __call__(self, args, **kwargs):
+        self.kwargs = dict(kwargs)
+        return SimpleNamespace(
+            stdout=self.stdout_bytes.decode(
+                kwargs.get("encoding", "utf-8"), kwargs.get("errors", "replace")
+            ),
+            stderr=self.stderr_bytes.decode(
+                kwargs.get("encoding", "utf-8"), kwargs.get("errors", "replace")
+            ),
+            returncode=0,
+        )
+
+
+def test_execute_decodes_utf8_output(monkeypatch) -> None:
+    """Non-ASCII UTF-8 device output must decode intact (no locale mojibake)."""
+    fake = _DecodingFakeRun("V2026 \u00fcber-ASCII \u65e5\u672c\u8a9e".encode("utf-8"))
+    monkeypatch.setattr("android_task_manager.adb.connection.subprocess.run", fake)
+    connection = ConnectionManager(adb_path="adb")
+
+    result = connection.execute(["getprop", "ro.product.model"])
+
+    assert result.stdout == "V2026 \u00fcber-ASCII \u65e5\u672c\u8a9e"
+
+
+def test_execute_tolerates_malformed_device_bytes(monkeypatch) -> None:
+    """Malformed bytes must decode with U+FFFD, never raise UnicodeDecodeError."""
+    fake = _DecodingFakeRun(b"model: \xff\xfe\x00garbage")
+    monkeypatch.setattr("android_task_manager.adb.connection.subprocess.run", fake)
+    connection = ConnectionManager(adb_path="adb")
+
+    result = connection.execute(["getprop", "ro.product.model"])
+
+    assert "\ufffd" in result.stdout
+    assert result.exit_code == 0
+
+
+def test_execute_requests_utf8_with_replace_policy(monkeypatch) -> None:
+    """The call site must explicitly request UTF-8 + the replace error policy."""
+    fake = _DecodingFakeRun(b"")
+    monkeypatch.setattr("android_task_manager.adb.connection.subprocess.run", fake)
+    connection = ConnectionManager(adb_path="adb")
+    connection.execute(["version"])
+
+    assert fake.kwargs is not None
+    assert fake.kwargs["encoding"] == "utf-8"
+    assert fake.kwargs["errors"] == "replace"

@@ -186,6 +186,13 @@ class ConnectionManager:
                 full_args,
                 capture_output=True,
                 text=True,
+                # Android device output is UTF-8. An explicit codec keeps the
+                # decode independent of the host locale (Windows ANSI
+                # codepages would otherwise mangle or crash on non-ASCII
+                # output); "replace" turns malformed device bytes into U+FFFD
+                # instead of raising UnicodeDecodeError.
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout if timeout is not None else self._timeout,
                 check=False,
                 # On Windows every adb call would otherwise flash a console
