@@ -80,14 +80,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install ".[dev]"
 
-      # Enforced scope: the pure core (diagnostics) and the ADB layer —
-      # the Phase-1 reliability surfaces. The GUI layer's pre-existing
-      # PySide6 typing debt is tracked separately (see pyproject.toml).
-      - name: Mypy (core + adb)
+      # Enforced scope: the pure core (diagnostics), the ADB layer and the
+      # device-information + diagnostics packages — the surfaces covered by
+      # the device intelligence work. The GUI layer's pre-existing PySide6
+      # typing debt is tracked separately (see pyproject.toml).
+      - name: Mypy (core + adb + device + diagnostics)
         run: |
           python -m mypy \
             src/android_task_manager/core \
-            src/android_task_manager/adb
+            src/android_task_manager/adb \
+            src/android_task_manager/device \
+            src/android_task_manager/diagnostics
 
   audit:
     name: Dependency audit (pip-audit)

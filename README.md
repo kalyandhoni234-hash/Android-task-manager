@@ -30,7 +30,7 @@ Android Task Manager turns *your* PC into a window into *your* Android device. T
 Two ways to use it:
 
 - **Terminal mode** — a dependency-light interactive dashboard (CPU / memory / processes / battery / network) with per-reader sampling cadences you control.
-- **Desktop GUI (PySide6)** — a live dashboard with history graphs, a selectable process table, an on-demand **Process Inspector** (`/proc/<pid>`), a per-process **Network Connections** investigation (socket tables), and three explicit, package-verified device actions: **Open App**, **App Info**, **Force Stop**.
+- **Desktop GUI (PySide6)** — a live dashboard with history graphs, a selectable process table, an on-demand **Process Inspector** (`/proc/<pid>`), a per-process **Network Connections** investigation (socket tables), a **Diagnostics** page (evidence-based device health findings), a per-device **baseline persistence** store, an **exportable device report**, and three explicit, package-verified device actions: **Open App**, **App Info**, **Force Stop**.
 
 Monitoring is **read-only**. The tool never writes to the device; the three device actions are the only interactive operations, each requires an explicit selection, and each runs only against a package whose identity has been verified against the device's installed-package list.
 
@@ -89,6 +89,25 @@ Monitoring is **read-only**. The tool never writes to the device; the three devi
 - **Evidence integrity** — every report carries a SHA-256 of its canonical payload (stdlib `hashlib`, no cryptography dependency) to detect accidental change.
 - See `docs/adr-0001-incident-reporting.md` for the design decisions (no LLM, read-only by construction, severity semantics, PDF placement).
 
+### 🩺 Device Diagnostics *(GUI)*
+
+- A deterministic, rule-based diagnostics engine over the already-collected snapshots — CPU, memory, battery, storage and security facts — turning thresholds into structured findings, each with WHAT / WHY / EVIDENCE / RECOMMENDED ACTION.
+- Findings are **individual and explainable, never a score**: three explicit severity levels (INFO / WARNING / CRITICAL), `UNKNOWN` data produces no claim, and the rules treat "no evidence" as "no finding" (see `docs/diagnostics-*` under `docs/`).
+- The **Diagnostics page** (sidebar → DEVICE → Diagnostics) renders findings severity-first with every explanation visible; the Overview card and the Device page's BATTERY / STORAGE / SECURITY cards annotate the most severe WARNING+ finding per category. An *absence of findings* is shown honestly as "no issues detected" — not as proof of health.
+
+### 📦 Device Report Export *(GUI)*
+
+- **Export Device Report** on the Device page produces a point-in-time, local-only JSON artifact of the connected device: structured identity + hardware + software + storage + network + security facts, the latest live battery / memory / CPU snapshots, and the diagnostics findings verbatim (severity-first, in report order).
+- **Deterministic and self-integrating** — a fixed key order plus `sort_keys` output means identical inputs yield byte-identical files; every artifact carries a SHA-256 of its canonical payload (same stdlib-only approach as the incident report) so accidental change is detectable.
+- **Privacy-aware by construction** — the artifact never contains `android_id`, Wi-Fi / Bluetooth MAC addresses, the Wi-Fi BSSID or per-interface MAC addresses (matching the incident report's exclusions); the ADB serial is kept, consistent with baseline session exports.
+- Exports are written **off the GUI thread** by a dedicated worker (duplicate requests are dropped; every attempt reports back), and a cancelled save dialog is a clean no-op.
+
+### 💾 Baseline Persistence *(GUI)*
+
+- A saved baseline is now **persisted per device** to the platform user-data directory (`%LOCALAPPDATA%\AndroidTaskManager` on Windows, `~/.local/share/android-task-manager` on Linux, `~/Library/Application Support` on macOS) as a versioned JSON envelope — the same deterministic `snapshot_to_dict` format as session exports, no pickle.
+- **One baseline per device, keyed by ADB serial**: reconnecting the same phone automatically restores its stored baseline (marked "(loaded)" in the Baseline header) so drift checks keep working across restarts; a baseline captured in the current session always wins over disk state.
+- Writes are **atomic** (temp file + `os.replace`) — a crash mid-write never leaves a torn baseline — and a persistence failure is shown honestly in the panel instead of being silently swallowed. Corrupt, foreign or wrong-device files simply yield the normal empty state.
+
 ### 🔌 ADB & Device Handling
 
 - Automatic **ADB discovery** (see [ADB discovery](#-adb-discovery)) with `adb version` validation of every candidate.
@@ -102,7 +121,8 @@ Monitoring is **read-only**. The tool never writes to the device; the three devi
 - **Local-only diagnostic logging.** The app writes a rotating log (512 KiB per file, 3 backups) to `%LOCALAPPDATA%\AndroidTaskManager\logs` on Windows (`~/.local/share/android-task-manager/logs` elsewhere; override with the `ATMAN_LOG_DIR` environment variable — tests use this). Nothing is ever uploaded; there is no telemetry.
 - **Sensitive-information redaction.** Every formatted log line is scrubbed: device serials are registered as secrets automatically at discovery time, and common credential shapes (password/token/API-key/`Bearer` tokens, GitHub/Slack/OpenAI-style tokens, MAC addresses) are masked before anything reaches disk.
 - **Worker error observability.** Unexpected worker failures (baseline save/check/export, device actions, permission audits, process inspection, update checks, incident export, the monitor pipeline) never crash the GUI: they report through the regular failure signals *and* write their full traceback to the diagnostic log. Expected, typed failures (e.g. device disconnected) are logged at WARNING without tracebacks.
-- **Diagnostics dialog** (sidebar → **Diagnostics**): shows the current log file, opens its folder in the system file manager, and exports a local diagnostic report (version, environment, recent log lines) to a destination you choose.
+- **Diagnostics dialog** (sidebar → **Diagnostic Log**): shows the current log file, opens its folder in the system file manager, and exports a local diagnostic report (version, environment, recent log lines) to a destination you choose.
+- **Device diagnostics page** (sidebar → **Diagnostics**): renders the diagnostics engine's findings (WHAT / WHY / EVIDENCE / RECOMMENDED ACTION) severity-first, with distinct "no device" and "no issues detected" states.
 
 ## 🖥️ Screenshots
 
@@ -157,7 +177,7 @@ The key architectural rule: **collectors never invoke `subprocess` directly.** A
 | Device bridge | ADB (`adb shell`) | not bundled (see [Why is ADB not bundled?](#why-is-adb-not-bundled)) |
 | Term renderer | custom, dependency-light | `terminal/renderer.py` |
 | Windows packaging | PyInstaller ≥ 6 | one-file windowed + debug builds |
-| Tests | pytest ≥ 7 | 966 tests, fixture-driven, GUI headless |
+| Tests | pytest ≥ 7 | fixture-driven, GUI headless |
 | CI/CD | GitHub Actions | Linux matrix (3.10–3.12) + Windows release build |
 | Product site | Next.js 16 (static export) | hosted on GitHub Pages |
 
@@ -178,6 +198,8 @@ android-task-manager/
 │   ├── network_investigation/        # socket tables (tcp{,6},udp{,6}) + UID attribution
 │   ├── device/                       # device identity: structured getprop/wm/df model,
 │   │                                 #   parser, collector (collected once per session)
+│   ├── device_report/                # device report export: deterministic JSON artifact
+│   │                                 #   with SHA-256 integrity + privacy exclusions
 │   ├── incident/                     # incident report: models (schema) · builder
 │   │                                 #   (deterministic aggregation) · renderers (JSON/HTML)
 │   ├── investigation/                # investigation core: drift stability · timeline ·
@@ -188,10 +210,11 @@ android-task-manager/
 │   ├── terminal/                     # dependency-light text renderer
 │   ├── gui/                          # PySide6 dashboard: sidebar navigation, overview,
 │   │                                 #   device-info & findings pages, widgets/, workers
-│   │                                 #   (incl. incident export worker + PDF writer),
-│   │                                 #   styles, setup panel, entry point (app.py -> main)
+│   │                                 #   (incl. incident + device-report export workers,
+│   │                                 #   PDF writer), styles, setup panel, entry point
+│   │                                 #   (app.py -> main)
 │   └── main.py                       # terminal entry point / sample loop
-├── tests/                            # 966 pytest tests (49 modules), fixed-device fixtures
+├── tests/                            # pytest suite, fixture-driven (no physical device)
 ├── packaging/                        # build_windows.ps1, icon + version-resource assets,
 │   │                                 #   entry stubs (entry_gui.py / entry_console.py)
 ├── docs/                             # ADRs (incident reporting, investigation core) +
@@ -288,15 +311,16 @@ The GUI accepts the same `--adb`, `--device`, `--interval`, `--process-interval`
 
 ### GUI layout
 
-The dashboard is organized by a persistent **sidebar** with seven pages, plus a top strip showing the update banner and the live ADB connection state:
+The dashboard is organized by a persistent **sidebar** with eight pages, plus a top strip showing the update banner and the live ADB connection state:
 
-- **Overview** — device summary, metric cards (processes, network, drift, HIGH/MEDIUM findings), security status and recent activity.
+- **Overview** — device summary, metric cards (processes, network, drift, HIGH/MEDIUM findings, diagnostics counts), security status and recent activity.
 - **Processes** — table (PID, CPU, MEM, STATE, NAME) sorted by CPU, with filtering/sorting, classification, and the selectable **Process Inspector** panel (details + Network Connections + permission audit).
 - **Network** — download/upload throughput, interface list grouped by type (active by default), history graph.
-- **Baseline** — baseline capture, drift check with suspicious-signal section, investigation timeline/process-tree/why-flagged actions, and session export (JSON/CSV).
+- **Baseline** — baseline capture, drift check with suspicious-signal section, investigation timeline/process-tree/why-flagged actions, and session export (JSON/CSV). Saved baselines are **persisted per device** and auto-restored on reconnect ("(loaded)" state).
 - **Findings** — suspicious signals severity-first (HIGH → MEDIUM), each with a *Why?* evidence button, plus incident report generation (view + export JSON/HTML/PDF).
-- **Device** — an "About phone" style information dashboard: device summary, basic information (manufacturer/brand/model/device/product/board/hardware/SoC), Android/software (version, API level, security patch, build ID/number, kernel, bootloader, baseband), CPU/hardware (processor, architecture, cores, max frequency), memory, battery, storage (internal `/data` volume with usage bar), display (resolution, density, refresh rate, orientation) and identifiers (Android ID, Wi-Fi/Bluetooth MAC). Static facts are collected **once per connection session** from `getprop`/`wm`/`df`/`dumpsys`; battery/memory/CPU reuse the existing collectors' snapshots — the Device page never runs its own polling.
+- **Device** — an "About phone" style information dashboard: device summary, basic information (manufacturer/brand/model/device/product/board/hardware/SoC), Android/software (version, API level, security patch, build ID/number, kernel, bootloader, baseband), CPU/hardware (processor, architecture, cores, max frequency), memory, battery, storage (internal `/data` volume with usage bar), display (resolution, density, refresh rate, orientation) and identifiers (Android ID, Wi-Fi/Bluetooth MAC). Static facts are collected **once per connection session** from `getprop`/`wm`/`df`/`dumpsys`; battery/memory/CPU reuse the existing collectors' snapshots — the Device page never runs its own polling. An **Export Device Report** button writes the deterministic, integrity-checked JSON artifact (see [Device Report Export](#-device-report-export-gui)).
 - **Health** — CPU (utilization + per-core bars + history), memory (available + breakdown + history), battery (level + history).
+- **Diagnostics** — the diagnostics engine's findings severity-first (CRITICAL → WARNING → INFO), each card showing WHAT / WHY / EVIDENCE / RECOMMENDED ACTION in full; the page distinguishes "no device connected" from "no issues detected".
 
 Missing values render as **N/A — unavailable on this device**; nothing is guessed or inferred. Long values (e.g. build fingerprint) are shortened on screen with the full value in the tooltip. When the device disconnects the Device page empties to a "NO DEVICE CONNECTED" state — no stale values survive a device switch.
 
@@ -316,7 +340,7 @@ Device facts come from standard Android system properties and read-only commands
 python -m pytest
 ```
 
-The suite: **966 tests across 49 modules** (`tests/`), covering the parsers (CPU, memory, process, battery, network), delta calculations, collectors, the ADB discovery/connection layers, the package-identity resolver/service, the network investigation, the incident report layer (builder, JSON/HTML renderers, GUI panel/dialog/worker), the investigation core (drift stability, timeline, attribution, why-flagged evidence, process tree), device information (getprop/wm/df parsing, collector, Device page), the GUI (widgets, sidebar navigation, overview/findings/device pages, setup flow, actions, workers), and the Phase-1 reliability layer (diagnostics core and redaction, ADB device-loss mapping and reconnect behavior, monitor stale-data invalidation, worker error observability, the Diagnostics dialog).
+The suite: **a fixture-driven pytest suite** (`tests/`) covering the parsers (CPU, memory, process, battery, network), delta calculations, collectors, the ADB discovery/connection layers, the package-identity resolver/service, the network investigation, the incident report layer (builder, JSON/HTML renderers, GUI panel/dialog/worker), the investigation core (drift stability, timeline, attribution, why-flagged evidence, process tree), device information (getprop/wm/df parsing, collector, Device page), the device report export layer (determinism, integrity, privacy exclusions, worker, GUI flow), baseline persistence (per-device store, atomic writes, corrupt/wrong-device handling, GUI auto-load), the diagnostics engine (rules, evaluation, Diagnostics page, overview/device annotations), the GUI (widgets, sidebar navigation, overview/findings/device pages, setup flow, actions, workers), and the reliability layer (diagnostics core and redaction, ADB device-loss mapping and reconnect behavior, monitor stale-data invalidation, worker error observability, the Diagnostics dialog).
 
 - Runs entirely against **fixed fixtures based on verified Vivo V2026 output — no physical device required**.
 - **GUI tests run headlessly** via Qt's `offscreen` platform plugin (`QT_QPA_PLATFORM=offscreen`): they construct widgets, deliver snapshots, drive the monitor worker, and cover the first-run setup flow (each connection state, the multi-device picker, ADB discovery) without a display.
@@ -328,11 +352,12 @@ Phase 1 adds three automated checks (also enforced in CI):
 
 ```bash
 python -m ruff check src tests        # lint (E4/E7/E9, F, I, B)
-python -m mypy src/android_task_manager/core src/android_task_manager/adb  # type check (enforced scope)
+python -m mypy src/android_task_manager/core src/android_task_manager/adb \
+  src/android_task_manager/device src/android_task_manager/diagnostics  # type check (enforced scope)
 python -m pip_audit                   # dependency vulnerability audit
 ```
 
-The mypy scope is the pure core + ADB layer; the GUI layer carries pre-existing PySide6 typing debt that is tracked for later phases. `pip-audit` needs the installed environment (`pip install -e ".[dev]"`).
+The mypy scope is the pure core + ADB layer plus the device-information and diagnostics packages; the rest of the GUI layer carries pre-existing PySide6 typing debt that is tracked for later phases. `pip-audit` needs the installed environment (`pip install -e ".[dev]"`).
 
 ## CI/CD
 
@@ -342,7 +367,7 @@ Three workflows in `.github/workflows/`:
 
 | Workflow | Trigger | What it does |
 | --- | --- | --- |
-| `ci.yml` | push / PR | Full test suite on **Python 3.10 / 3.11 / 3.12** (headless Qt), `python -m build` package check, **lint** (`ruff`), **typecheck** (`mypy` on `core` + `adb`), **dependency audit** (`pip-audit`), plus a website job (Next.js lint + static export under Node 22). |
+| `ci.yml` | push / PR | Full test suite on **Python 3.10 / 3.11 / 3.12** (headless Qt), `python -m build` package check, **lint** (`ruff`), **typecheck** (`mypy` on `core` + `adb` + `device` + `diagnostics`), **dependency audit** (`pip-audit`), plus a website job (Next.js lint + static export under Node 22). |
 | `release.yml` | tag `v*` | On **Windows**, runs `packaging/build_windows.ps1`, generates `SHA256SUMS.txt`, and publishes `AndroidTaskManager.exe`, `AndroidTaskManager-debug.exe` and the checksums to a GitHub Release (`softprops/action-gh-release`). |
 | `deploy-pages.yml` | push to `master` (website paths) / manual | Builds the Next.js static export and deploys it to GitHub Pages. Note: repo settings must use **Source: GitHub Actions**. |
 
@@ -372,7 +397,7 @@ Both builds embed the product icon (`packaging/assets/atm.ico`) and a Windows ve
 
 Every release publishes its executables **together with `SHA256SUMS.txt`**, and the product website shows the checksum of the exact published EXE — so you can verify what you downloaded. Release pages: <https://github.com/kalyandhoni234-hash/Android-task-manager/releases>
 
-> **Version note:** `v0.4.5` is an **internal development checkpoint** (Phase 1 — diagnostics, ADB reliability, worker observability, engineering quality; Phase 2A — device information architecture; Phase 2B — CPU & hardware intelligence; Phase 2C — GPU & display intelligence; Phase 2D — battery & storage intelligence: static battery facts (design capacity, cycle count) and the internal-volume filesystem type; dynamic battery data stays with the live battery monitor). No release was published for it; the next public release is **v0.5.0**.
+> **Version note:** `v0.4.5`–`v0.4.8` are **internal development checkpoints** (Phase 1 — diagnostics, ADB reliability, worker observability, engineering quality; Phase 2A — device information architecture; Phase 2B — CPU & hardware intelligence; Phase 2C — GPU & display intelligence; Phase 2D — battery & storage intelligence: static battery facts (design capacity, cycle count) and the internal-volume filesystem type; dynamic battery data stays with the live battery monitor; plus the device diagnostics engine & page, device report export, per-device baseline persistence and release hygiene, all under the current dev version `v0.4.8`). No release was published for any of them; the next public release is **v0.5.0**.
 
 ## 🌐 Product Website
 
