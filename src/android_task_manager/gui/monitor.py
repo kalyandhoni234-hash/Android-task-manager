@@ -16,7 +16,7 @@ import logging
 import time
 from enum import Enum
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 from ..adb.connection import CommandRunner, ConnectionManager
 from ..adb.exceptions import (
@@ -76,8 +76,12 @@ class MonitorWorker(QObject):
 
     Instantiate on the GUI thread, then ``moveToThread`` onto a QThread and
     start the thread with ``started`` connected to ``run`` (see
-    ``gui.app.main``). In tests the worker can also be run synchronously by
-    calling ``tick()`` directly without any thread.
+    ``gui.app.main``). ``run`` starts a QTimer and returns, so the thread's
+    event loop keeps running: queued slots (``retry``, ``select_device``,
+    ``locate_adb``, ``stop``) are delivered while the timer drives
+    connection attempts and sampling. In tests the worker can also be run
+    synchronously by calling ``_connect()`` / ``tick()`` directly without
+    any thread.
     """
 
     #: (cpu, memory, processes, battery, network) — cached snapshot objects
@@ -115,6 +119,7 @@ class MonitorWorker(QObject):
         network_investigation_interval: float = 10.0,
     ) -> None:
         super().__init__()
+        self._timeout = timeout
         self._connection = connection or ConnectionManager(
             adb_path=adb_path,
             timeout=timeout,
@@ -136,6 +141,8 @@ class MonitorWorker(QObject):
         self._network_investigation_interval = network_investigation_interval
 
         self._stopped = False
+        self._connected = False
+        self._timer: QTimer | None = None
         self._cpu: object | None = None
         self._memory: object | None = None
         self._processes: object | None = None
@@ -152,37 +159,63 @@ class MonitorWorker(QObject):
     # Lifecycle / loop
     # ------------------------------------------------------------------
 
+    @Slot()
     def stop(self) -> None:
-        """Ask the sampling loop to exit after the current tick."""
+        """Ask the sampling loop to exit after the current tick.
+
+        Safe to call from any thread (a plain flag write). When the worker
+        thread is inside a blocking ADB call, the loop exits once that call
+        returns and the stop flag is observed.
+        """
         self._stopped = True
+        if self._timer is not None:
+            self._timer.stop()
 
     def run(self) -> None:
-        """The worker-thread entry point: connect, then sample forever.
+        """The worker-thread entry point: start the sampling timer, then return.
 
         Connection is attempted immediately and re-attempted every
         ``_RETRY_DELAY_S`` while it fails, so hot-plugging a phone, authorizing
         USB debugging, or locating adb mid-session recovers without restarting
         the app. Sampling only starts once a device is connected.
+
+        Returning (instead of looping) is deliberate: QThread's event loop
+        then processes queued slots directed at this worker — ``retry``,
+        ``select_device``, ``locate_adb`` and ``stop`` — while the timer
+        drives connection + sampling.
         """
         self._connected = False
-        while not self._stopped:
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._on_timer)
+        # An interval of 0 fires the first timeout as soon as the event
+        # loop starts: the first connection attempt happens immediately.
+        self._timer.start(0)
+
+    def _on_timer(self) -> None:
+        """One timer tick: (re)connect while offline, sample while online."""
+        if self._stopped:
+            return
+        if not self._connected:
+            self._connect()
             if not self._connected:
-                self._connect()
-                if not self._connected:
-                    time.sleep(self._RETRY_DELAY_S)
-                    continue
-            start = time.monotonic()
-            self.tick()
-            elapsed = time.monotonic() - start
-            time.sleep(max(0.0, self._cpu_interval - elapsed))
+                self._timer.setInterval(int(self._RETRY_DELAY_S * 1000))
+                return
+            self._timer.setInterval(int(self._cpu_interval * 1000))
+        self.tick()
 
     def _connect(self) -> None:
         try:
             self._connection.verify_available()
+            if self._stopped:
+                return
             serial = self._connection.require_device()
+            if self._stopped:
+                return
             manufacturer = self._connection.shell(["getprop", "ro.product.manufacturer"]).strip()
             model = self._connection.shell(["getprop", "ro.product.model"]).strip()
             release = self._connection.shell(["getprop", "ro.build.version.release"]).strip()
+            if self._stopped:
+                return
             label = f"{manufacturer} {model}".strip() or serial
             self.device_info.emit(label, release or "Unknown")
             # One structured identity snapshot per connection session; the
@@ -261,11 +294,13 @@ class MonitorWorker(QObject):
     # on the worker thread via Qt's queued connections)
     # ------------------------------------------------------------------
 
+    @Slot()
     def retry(self) -> None:
         """Re-attempt the connection immediately (e.g. the Retry button)."""
         if not self._stopped:
             self._connect()
 
+    @Slot(str)
     def set_adb_path(self, adb_path: str) -> None:
         """Switch the shared connection to a different adb executable."""
         setter = getattr(self._connection, "set_adb_path", None)
@@ -274,6 +309,28 @@ class MonitorWorker(QObject):
         if not self._stopped:
             self._connect()
 
+    @Slot(str)
+    def locate_adb(self, adb_path: str) -> None:
+        """Validate a user-chosen adb executable, then reconnect with it.
+
+        Runs entirely on the worker thread (queued from the GUI), so the
+        ``adb version`` probe and the re-connect never block the UI. An
+        unusable executable surfaces as the typed ADB_MISSING state with a
+        message instead of being silently accepted.
+        """
+        if self._stopped:
+            return
+        from ..adb.discovery import is_usable_adb, version_validator
+
+        if not is_usable_adb(adb_path, version_validator(self._timeout)):
+            self.connection_changed.emit(
+                ConnectionState.ADB_MISSING,
+                f"'{adb_path}' is not a usable adb executable.",
+            )
+            return
+        self.set_adb_path(adb_path)
+
+    @Slot(str)
     def select_device(self, serial: str) -> None:
         """Pin the target device to *serial* and reconnect to it."""
         setter = getattr(self._connection, "set_device_serial", None)

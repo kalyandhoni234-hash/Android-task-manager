@@ -353,17 +353,24 @@ def test_wire_connects_devices_signal(qtapp) -> None:
     assert window._stack.currentIndex() == 0
 
 
-def test_worker_run_recovers_after_failure(qtapp, monkeypatch) -> None:
-    """The run loop re-attempts connection until it succeeds (hot-plug)."""
-    import threading
+def test_worker_run_recovers_after_failure(qtapp) -> None:
+    """The run loop re-attempts connection until it succeeds (hot-plug).
+
+    Runs on a real QThread: ``run`` starts the sampling timer and returns,
+    the thread's event loop delivers the timer ticks, and the retry delay
+    drives the re-attempts until the device appears.
+    """
+    import time
+
+    from PySide6.QtCore import QThread
+    from PySide6.QtWidgets import QApplication
 
     connection = _RecordingConnection()
     worker = MonitorWorker(connection=connection)
-    states: list = []
-    worker.connection_changed.connect(lambda state, detail: states.append((state, detail)))
-    monkeypatch.setattr("android_task_manager.gui.monitor.time.sleep", lambda _s: None)
-    monkeypatch.setattr("android_task_manager.gui.monitor.time.monotonic", lambda: 0.0)
-
+    seen: set = set()
+    worker.connection_changed.connect(
+        lambda state, detail: seen.add(state)
+    )
     attempts = {"count": 0}
 
     def flaky_require_device() -> str:
@@ -373,10 +380,24 @@ def test_worker_run_recovers_after_failure(qtapp, monkeypatch) -> None:
         return "A1"
 
     connection.require_device = flaky_require_device
-    threading.Timer(0.05, lambda: setattr(worker, "_stopped", True)).start()
-    worker.run()
-    assert states[0][0] is ConnectionState.DISCONNECTED
-    assert ConnectionState.CONNECTED in {state for state, _ in states}
+
+    thread = QThread()
+    worker.moveToThread(thread)
+    thread.started.connect(worker.run)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 15.0
+        while time.monotonic() < deadline and ConnectionState.CONNECTED not in seen:
+            QApplication.processEvents()
+            time.sleep(0.01)
+        assert ConnectionState.CONNECTED in seen
+        assert ConnectionState.DISCONNECTED in seen
+        assert attempts["count"] >= 3
+    finally:
+        worker.stop()
+        thread.quit()
+        thread.wait(5000)
+        assert not thread.isRunning(), "worker thread did not stop cleanly"
 
 
 # ---------------------------------------------------------------------------
