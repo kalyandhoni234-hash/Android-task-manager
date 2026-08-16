@@ -25,6 +25,7 @@ from ..action import (
 )
 from ..adb.connection import CommandRunner, ConnectionManager
 from ..core.diagnostics import log_unexpected_failure
+from .monitor import ConnectionState
 
 
 class ActionWorker(QObject):
@@ -114,6 +115,16 @@ class ActionWorker(QObject):
         finally:
             self._busy = False
         self.action_completed.emit(result)
+
+    @Slot(object, str)
+    def on_connection_changed(self, state, _detail: str) -> None:
+        """Refresh the installed package list when the device (re)connects.
+
+        Runs on this worker's thread (queued from the monitor thread), so
+        the ``pm list packages`` subprocess never blocks the GUI.
+        """
+        if state is ConnectionState.CONNECTED:
+            self.reload_packages()
 
     @Slot()
     def reload_packages(self) -> None:

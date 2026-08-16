@@ -11,14 +11,17 @@ PySide6 imports are deferred to ``main()`` so that ``--help`` and the clean
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from typing import Sequence
 
 from .. import __version__
 from ..adb.connection import ConnectionManager
-from ..adb.discovery import find_adb, is_usable_adb, version_validator
+from ..adb.discovery import find_adb, version_validator
 from ..core.diagnostics import setup_logging
+
+logger = logging.getLogger("android_task_manager.gui")
 
 _DEFAULT_INTERVAL = 2.0
 _DEFAULT_MEMORY_INTERVAL = 10.0
@@ -26,6 +29,18 @@ _DEFAULT_PROCESS_INTERVAL = 5.0
 _DEFAULT_BATTERY_INTERVAL = 15.0
 _DEFAULT_NETWORK_INTERVAL = 5.0
 _DEFAULT_NETWORK_INVESTIGATION_INTERVAL = 10.0
+
+#: How long shutdown waits per worker thread. Bounded by the worst-case
+#: in-flight work: a single ADB subprocess (``--timeout``, default 10 s)
+#: plus scheduling slack. The monitor's connect path observes the stop
+#: flag between commands, so a responsive device shuts down in well under
+#: this budget; only a wedged adb can exceed it.
+_SHUTDOWN_WAIT_MS = 15_000
+
+#: Threads whose bounded shutdown wait expired (wedged adb). References are
+#: kept alive so a running QThread is never destroyed mid-flight; the thread
+#: finishes on its own once the in-flight call returns.
+_ACTIVE_THREADS: list = []
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -145,6 +160,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     window = MainWindow()
     worker = MonitorWorker(
         connection=connection,
+        timeout=args.timeout,
         cpu_interval=args.interval,
         memory_interval=args.memory_interval,
         process_interval=args.process_interval,
@@ -170,6 +186,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # react. Retry/relocate/device-pick are delivered onto the worker thread.
     window.retry_requested.connect(worker.retry)
     window.device_connect_requested.connect(worker.select_device)
+    window.adb_path_chosen.connect(worker.locate_adb)
 
     def on_locate_requested() -> None:
         from PySide6.QtWidgets import QFileDialog
@@ -180,9 +197,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             "",
             "adb executable (adb.exe;adb.bat;adb.cmd;adb)",
         )
-        if chosen and is_usable_adb(chosen, version_validator(args.timeout)):
-            connection.set_adb_path(str(chosen))
-            worker.retry()
+        if chosen:
+            # Only the file dialog runs here; validation (`adb version`) and
+            # the reconnect happen on the monitor worker's thread.
+            window.adb_path_chosen.emit(str(chosen))
 
     window.locate_requested.connect(on_locate_requested)
 
@@ -220,22 +238,37 @@ def main(argv: Sequence[str] | None = None) -> int:
     update_thread = QThread()
     update_worker.moveToThread(update_thread)
 
+    threads = [
+        thread,
+        inspector_thread,
+        actions_thread,
+        baseline_thread,
+        permission_thread,
+        incident_thread,
+        update_thread,
+    ]
+
     def shutdown() -> None:
+        # 1) Cooperative stop request: the monitor observes the flag between
+        #    ADB commands and exits its timer loop; the other workers have no
+        #    long-lived loop and are stopped by their event loops quitting.
         worker.stop()
-        thread.quit()
-        thread.wait(3000)
-        inspector_thread.quit()
-        inspector_thread.wait(3000)
-        actions_thread.quit()
-        actions_thread.wait(3000)
-        baseline_thread.quit()
-        baseline_thread.wait(3000)
-        permission_thread.quit()
-        permission_thread.wait(3000)
-        incident_thread.quit()
-        incident_thread.wait(3000)
-        update_thread.quit()
-        update_thread.wait(3000)
+        # 2) Ask every event loop to exit. The monitor thread must be out of
+        #    its blocking ADB call first, so this is a request, not a kill.
+        for thread in threads:
+            thread.quit()
+        # 3) Bounded wait. On a responsive device the monitor's in-flight
+        #    command returns within ``--timeout`` and every thread finishes
+        #    quickly; a wedged adb is the only way to exceed the budget.
+        for thread in threads:
+            if not thread.wait(_SHUTDOWN_WAIT_MS):
+                logger.warning(
+                    "thread %r still running after %d ms; keeping it alive "
+                    "to avoid destroying a running QThread",
+                    thread,
+                    _SHUTDOWN_WAIT_MS,
+                )
+                _ACTIVE_THREADS.append(thread)
 
     app.aboutToQuit.connect(shutdown)
 

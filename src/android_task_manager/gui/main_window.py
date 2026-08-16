@@ -96,6 +96,9 @@ class MainWindow(QMainWindow):
     retry_requested = Signal()
     #: The user asked to locate an adb executable via a file dialog.
     locate_requested = Signal()
+    #: (path) the user chose an adb executable; delivered to the monitor
+    #: worker's thread for validation and reconnect.
+    adb_path_chosen = Signal(str)
     #: (serial) the user picked a device from the multi-device list.
     device_connect_requested = Signal(object)
 
@@ -937,11 +940,10 @@ def wire_actions(window: MainWindow, monitor: MonitorWorker, actions) -> None:
     window.action_requested.connect(actions.request_action)
     actions.action_completed.connect(window.on_action_result)
     actions.packages_ready.connect(window.on_packages_ready)
-    monitor.connection_changed.connect(
-        lambda state, _detail: (
-            actions.reload_packages() if state is ConnectionState.CONNECTED else None
-        )
-    )
+    # Connection transitions are forwarded to the action worker's own thread:
+    # a CONNECTED state triggers the package-list refresh there, never on
+    # the GUI thread (the old lambda ran in the emitting thread's context).
+    monitor.connection_changed.connect(actions.on_connection_changed)
 
 
 def wire_security(window: MainWindow, worker) -> None:
