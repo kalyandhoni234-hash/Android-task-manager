@@ -30,6 +30,7 @@ _DEFAULT_PROCESS_INTERVAL = 5.0
 _DEFAULT_BATTERY_INTERVAL = 15.0
 _DEFAULT_NETWORK_INTERVAL = 5.0
 _DEFAULT_NETWORK_INVESTIGATION_INTERVAL = 10.0
+_DEFAULT_STORAGE_INTERVAL = 30.0
 
 #: How long shutdown waits per worker thread. Bounded by the worst-case
 #: in-flight work: a single ADB subprocess (``--timeout``, default 10 s)
@@ -98,6 +99,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=_DEFAULT_NETWORK_INVESTIGATION_INTERVAL,
         help="Seconds between socket-table reads (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--storage-interval",
+        type=float,
+        default=_DEFAULT_STORAGE_INTERVAL,
+        help="Seconds between internal-storage reads (default: %(default)s).",
     )
     parser.add_argument(
         "--timeout", type=float, default=10.0, help="Per-command timeout (default: %(default)s)."
@@ -174,6 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         battery_interval=args.battery_interval,
         network_interval=args.network_interval,
         network_investigation_interval=args.network_investigation_interval,
+        storage_interval=args.storage_interval,
     )
     inspector = ProcessInspectionWorker(connection=connection, timeout=args.timeout)
     actions = ActionWorker(connection=connection, timeout=args.timeout)

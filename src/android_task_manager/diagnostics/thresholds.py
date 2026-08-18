@@ -27,6 +27,12 @@ from ..thresholds import (
     MEMORY_USED_HIGH_PERCENT as _CANONICAL_MEMORY_HIGH,
 )
 from ..thresholds import (
+    STORAGE_USED_ELEVATED_PERCENT as _CANONICAL_STORAGE_ELEVATED,
+)
+from ..thresholds import (
+    STORAGE_USED_HIGH_PERCENT as _CANONICAL_STORAGE_HIGH,
+)
+from ..thresholds import (
     TEMPERATURE_ELEVATED_C as _CANONICAL_TEMPERATURE_ELEVATED,
 )
 from ..thresholds import (
@@ -49,12 +55,11 @@ TEMPERATURE_ELEVATED_C = _CANONICAL_TEMPERATURE_ELEVATED
 TEMPERATURE_CRITICAL_C = _CANONICAL_TEMPERATURE_HIGH
 
 #: Used share of the internal storage volume above this percent is a
-#: WARNING (operationally significant pressure starts around here).
-STORAGE_ELEVATED_PERCENT = 80.0
+#: WARNING (canonical source: the live-dashboard thresholds).
+STORAGE_ELEVATED_PERCENT = _CANONICAL_STORAGE_ELEVATED
 #: Used share of the internal storage volume at/above this percent is
-#: CRITICAL (the widely recognized "storage running out" region; low
-#: free space breaks app updates and system operations).
-STORAGE_CRITICAL_PERCENT = 90.0
+#: CRITICAL (canonical source: the live-dashboard thresholds).
+STORAGE_CRITICAL_PERCENT = _CANONICAL_STORAGE_HIGH
 
 
 __all__ = [
