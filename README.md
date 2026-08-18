@@ -2,7 +2,7 @@
 
 # Android Task Manager
 
-**A live Android/Linux system monitor for your PC — CPU, memory, processes, battery and network, pulled from a connected Android device over ADB.**
+**A live Android/Linux system monitor for your PC — CPU, memory, processes, battery and network, pulled from a connected Android device over ADB — with a package-verified application manager (open, info, force stop, enable/disable, uninstall).**
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![GUI](https://img.shields.io/badge/GUI-PySide6-41CD52?style=flat-square&logo=qt&logoColor=white)](https://doc.qt.io/qtforpython-6/)
@@ -15,7 +15,7 @@
 
 **Get it — no Python required:**
 
-[![Download for Windows](https://img.shields.io/badge/Download-AndroidTaskManager.exe-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/download/v0.5.0/AndroidTaskManager.exe)
+[![Download for Windows](https://img.shields.io/badge/Download-AndroidTaskManager.exe-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/download/v0.6.0/AndroidTaskManager.exe)
 [![Product website](https://img.shields.io/badge/Product-Website-white?style=for-the-badge&logo=github&logoColor=white)](https://kalyandhoni234-hash.github.io/Android-task-manager/)
 [![Releases](https://img.shields.io/badge/GitHub-Releases-white?style=for-the-badge&logo=github&logoColor=white)](https://github.com/kalyandhoni234-hash/Android-task-manager/releases)
 
@@ -30,9 +30,9 @@ Android Task Manager turns *your* PC into a window into *your* Android device. T
 Two ways to use it:
 
 - **Terminal mode** — a dependency-light interactive dashboard (CPU / memory / processes / battery / network) with per-reader sampling cadences you control.
-- **Desktop GUI (PySide6)** — a live dashboard with history graphs, a selectable process table, an on-demand **Process Inspector** (`/proc/<pid>`), a per-process **Network Connections** investigation (socket tables), a **Diagnostics** page (evidence-based device health findings), a per-device **baseline persistence** store, an **exportable device report**, and three explicit, package-verified device actions: **Open App**, **App Info**, **Force Stop**.
+- **Desktop GUI (PySide6)** — a live dashboard with history graphs, a selectable process table, an on-demand **Process Inspector** (`/proc/<pid>`), a per-process **Network Connections** investigation (socket tables), a **Diagnostics** page (evidence-based device health findings), a per-device **baseline persistence** store, an **exportable device report**, an **Applications manager** (installed-app inventory with per-package details and capability-gated device actions), and explicit, package-verified device actions: **Open App**, **App Info**, **Force Stop**, **Enable/Disable**, **Uninstall**.
 
-Monitoring is **read-only**. The tool never writes to the device; the three device actions are the only interactive operations, each requires an explicit selection, and each runs only against a package whose identity has been verified against the device's installed-package list.
+Monitoring and inspection are **read-only**. The only interactive operations are the six device actions, each requires an explicit selection, each runs only against a package whose identity has been verified against the device's installed-package list, and the destructive ones (force stop, disable, uninstall) require an explicit confirmation that names the exact target package.
 
 ## ✨ Features
 
@@ -73,8 +73,21 @@ Monitoring is **read-only**. The tool never writes to the device; the three devi
 - **Open App** — resolved to a verified launch component and started with `am start -W -n`.
 - **App Info** — opens the Android settings page for the package (via `am start` targeting the app-details intent).
 - **Force Stop** — `am force-stop <package>`.
+- **Enable / Disable** — `pm enable` / `pm disable-user --user 0`; the toggle appears only when the device reported a concrete enabled state, and re-enabling is always offered for a disabled app.
+- **Uninstall** — `pm uninstall <package>` (user-data removal; never `-k`). Never offered for system applications.
 - **Identity is never guessed.** Every action is resolved through the `PackageResolver`: an in-memory, reconnect-refreshed view of the device's installed packages (`pm list packages`). A process without a positive verification against the installed list has **no** application identity — nothing is acted on, and a rejected candidate (e.g. a shell module, a non-app module process, a secondary-process suffix) is rejected up front.
+- **Capability gate.** Buttons are derived only from the current package details via `action.capability`: system applications never see uninstall/disable controls, and a disabled app always gets Enable. The window layer re-validates the gate before every dispatch (defense in depth).
+- **Explicit confirmations.** Force Stop, Disable and Uninstall always ask for confirmation that names the exact target package — no one-click destructive action.
+- **Typed outcomes.** Every action returns a typed result (success / typed failure: not found, not supported, permission denied, invalid target, device lost); permission-denied results are detected from the device output, not guessed.
 - Deliberately **no** kill-all, no cache/data clearing, no restarts — no write access of any other kind.
+
+### 📦 Applications Manager *(GUI)*
+
+- The **Applications page** (sidebar → MANAGE → Applications) lists the installed apps: package, type (SYSTEM / USER), enabled state, UID, version code and APK path, with client-side filtering and numeric-aware column sorting; system rows are tinted so the destructive-control boundary reads at a glance.
+- Inventory is normalized from `pm list packages -f -U --show-versioncode` plus the system/user/disabled sets — one typed `ApplicationSnapshot`, honest empty state on failure, and a full refresh whenever the device (re)connects or a state-changing action succeeds.
+- Selecting a row reads **per-package details** on demand (`dumpsys package`): version name/code, UID, APK path, install location, installer, enabled state, launch activity, and component counts (activities/services/receivers), parsed with the resolver-table headers matched by action AND category intent so launcher detection never depends on one header's wording.
+- The details panel carries the capability-gated action row (Open / Info / Force Stop / Disable|Enable / Uninstall) and an **Audit Permissions** button reusing the shared permission worker.
+- **Process → Application flow:** the Process Inspector's **Manage** button jumps from a verified process to its application row, with details selected even when the inventory is stale (falls back to a direct read).
 
 ### 🌐 Network Monitoring
 
@@ -159,17 +172,18 @@ Android Device (USB)
         ┌──────┴──────┐
         ▼             ▼
   Terminal         GUI (PySide6)
- renderer      MonitorWorker · InspectorWorker · ActionWorker
-               (background threads — the dashboard never blocks)
+ renderer      MonitorWorker · InspectorWorker · ActionWorker ·
+               AppsWorker (background threads — the dashboard never blocks)
 ```
 
 The key architectural rule: **collectors never invoke `subprocess` directly.** All ADB execution is centralized in `adb/connection.py` (`ConnectionManager`, which satisfies the `CommandRunner` protocol that every collector and GUI worker consumes). Raw device output is parsed into normalized, frozen-dataclass models, and only those models reach the renderers — neither the terminal renderer nor the GUI widgets ever touch ADB or parse device text.
 
 ## 🔒 Safety & Design Principles
 
-- **Read-only by construction.** The app only reads `/proc`, `/sys` and `dumpsys`/`pm` state. No process is started, stopped, killed, or re-prioritized except the three explicit, selected, package-verified device actions.
+- **Read-only by construction.** The app only reads `/proc`, `/sys` and `dumpsys`/`pm` state. No process is started, stopped, killed, or re-prioritized except the six explicit, selected, package-verified device actions — and the destructive ones (force stop, disable, uninstall) always require an explicit confirmation naming the exact package.
 - **No arbitrary ADB shell.** The tool never forwards interactive or free-form shell input; every command is a fixed argument list.
 - **Verified package identity.** No device action runs without the target being positively verified against the device's installed-package list; stale identities are invalidated immediately when a device action reports a package as no longer installed.
+- **Capability-gated destructive controls.** System applications never receive uninstall/disable requests — the gate is enforced in the widget and re-checked at the window before dispatch.
 - **No fabricated data.** A value that cannot be read is reported as `N/A` — never an invented zero. Kernel threads show `N/A` memory (a kernel property); permission-protected `/proc/<pid>/io` shows `N/A`.
 - **Validated inputs.** PIDs must be positive integers before any `/proc/<pid>` path is built; device-side paths are fixed constants, never user-interpolated strings.
 - **Honest semantics.** "Resident" is `VmRSS`, not PSS (shared pages are double-counted) — the UI and docs say so. Socket attribution is by UID, not PID (Android's limitation), and the tool says so.
@@ -211,7 +225,11 @@ android-task-manager/
 │   │                                 #   (deterministic aggregation) · renderers (JSON/HTML)
 │   ├── investigation/                # investigation core: drift stability · timeline ·
 │   │                                 #   attribution · why-flagged evidence · process tree
-│   ├── action/                       # package verification + Open App / App Info / Force Stop
+│   ├── action/                       # package verification + Open App / App Info / Force
+│   │                                 #   Stop / Enable / Disable / Uninstall, with the
+│   │                                 #   capability gate (capability.py)
+│   ├── applications/                 # application inventory: AppInfo/AppDetails models,
+│   │                                 #   pm list + dumpsys parsers, collector
 │   ├── core/                         # diagnostics: rotating local log, redaction,
 │   │                                 #   failure helpers, diagnostic export
 │   ├── terminal/                     # dependency-light text renderer
@@ -224,8 +242,9 @@ android-task-manager/
 ├── tests/                            # pytest suite, fixture-driven (no physical device)
 ├── packaging/                        # build_windows.ps1, icon + version-resource assets,
 │   │                                 #   entry stubs (entry_gui.py / entry_console.py)
-├── docs/                             # ADRs (incident reporting, investigation core) +
-│                                     #   engineering research (m14-network-research.md)
+├── docs/                             # ADRs (incident reporting, investigation core,
+│                                     #   device management) + engineering research
+│                                     #   (m14-network-research.md)
 ├── android-task-manager-website/     # Next.js product website (static export -> out/)
 ├── .github/workflows/                # ci.yml · release.yml · deploy-pages.yml
 ├── pyproject.toml                    # single version authority (dynamic from __init__.py)
@@ -235,10 +254,10 @@ android-task-manager/
 
 ## 🚀 Download & Run (end users — no Python needed)
 
-1. Download **`AndroidTaskManager.exe`** (a self-contained PySide6 build) from the [latest release](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/download/v0.5.0/AndroidTaskManager.exe) — or from the [product website](https://kalyandhoni234-hash.github.io/Android-task-manager/), which links directly to the exact published artifact and shows its SHA-256 checksum.
+1. Download **`AndroidTaskManager.exe`** (a self-contained PySide6 build) from the [latest release](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/download/v0.6.0/AndroidTaskManager.exe) — or from the [product website](https://kalyandhoni234-hash.github.io/Android-task-manager/), which links directly to the exact published artifact and shows its SHA-256 checksum.
 2. Double-click the EXE. You do **not** need Python, git or the source tree.
 3. The **connection-setup screen** walks you through the only remaining requirement — ADB + a connected device (details in the GUI section below).
-4. The live dashboard appears. Monitoring is read-only; the three device actions are explicit and require a selection.
+4. The live dashboard appears. Monitoring is read-only; the device actions are explicit and require a selection, and destructive ones ask for confirmation.
 
 The EXE carries the product icon and a Windows version resource (product version = release version, from the single version source). On first launch, Windows SmartScreen may warn about an unsigned executable — it is a portable build that only talks to your device over ADB; choose *More info → Run anyway* if you trust the source (this is where the published SHA-256 checksum lets you verify the file you ran).
 
@@ -319,11 +338,12 @@ The GUI accepts the same `--adb`, `--device`, `--interval`, `--process-interval`
 
 ### GUI layout
 
-The dashboard is organized by a persistent **sidebar** with eight pages, plus a top strip showing the update banner and the live ADB connection state:
+The dashboard is organized by a persistent **sidebar** with nine pages, plus a top strip showing the update banner and the live ADB connection state:
 
 - **Overview** — live metrics row (CPU / RAM / Battery / Storage with trends and level coloring), device summary, metric cards (processes, network, drift, HIGH/MEDIUM findings, diagnostics counts), security status and recent activity.
 - **Processes** — table (PID, UID, CPU, MEM, STATE, NAME) sorted by CPU, with filtering/sorting, classification, and the selectable **Process Inspector** panel (details + Network Connections + permission audit).
 - **Network** — download/upload throughput, interface list grouped by type (active by default), history graph.
+- **Applications** — the installed-application inventory (package, type, state, UID, version, APK path) with filtering/sorting and a per-package detail panel: version details, components, permission audit, and the capability-gated action row (Open App / App Info / Force Stop / Disable|Enable / Uninstall). System apps are tinted and never offer destructive controls; destructive actions ask for an explicit confirmation naming the package. The Process Inspector's **Manage** button jumps here with the process's package selected.
 - **Baseline** — baseline capture, drift check with suspicious-signal section, investigation timeline/process-tree/why-flagged actions, and session export (JSON/CSV). Saved baselines are **persisted per device** and auto-restored on reconnect ("(loaded)" state).
 - **Findings** — suspicious signals severity-first (HIGH → MEDIUM), each with a *Why?* evidence button, plus incident report generation (view + export JSON/HTML/PDF).
 - **Device** — an "About phone" style information dashboard: device summary, basic information (manufacturer/brand/model/device/product/board/hardware/SoC), Android/software (version, API level, security patch, build ID/number, kernel, bootloader, baseband), CPU/hardware (processor, architecture, cores, max frequency), memory, battery, storage (internal `/data` volume with usage bar), display (resolution, density, refresh rate, orientation) and identifiers (Android ID, Wi-Fi/Bluetooth MAC). Static facts are collected **once per connection session** from `getprop`/`wm`/`df`/`dumpsys`; battery/memory/CPU reuse the existing collectors' snapshots — the Device page never runs its own polling. An **Export Device Report** button writes the deterministic, integrity-checked JSON artifact (see [Device Report Export](#-device-report-export-gui)).
@@ -348,7 +368,7 @@ Device facts come from standard Android system properties and read-only commands
 python -m pytest
 ```
 
-The suite: **a fixture-driven pytest suite** (`tests/`) covering the parsers (CPU, memory, process, battery, network), delta calculations, collectors, the ADB discovery/connection layers, the package-identity resolver/service, the network investigation, the incident report layer (builder, JSON/HTML renderers, GUI panel/dialog/worker), the investigation core (drift stability, timeline, attribution, why-flagged evidence, process tree), device information (getprop/wm/df parsing, collector, Device page), the device report export layer (determinism, integrity, privacy exclusions, worker, GUI flow), baseline persistence (per-device store, atomic writes, corrupt/wrong-device handling, GUI auto-load), the diagnostics engine (rules, evaluation, Diagnostics page, overview/device annotations), the GUI (widgets, sidebar navigation, overview/findings/device pages, setup flow, actions, workers), and the reliability layer (diagnostics core and redaction, ADB device-loss mapping and reconnect behavior, monitor stale-data invalidation, worker error observability, the Diagnostics dialog).
+The suite: **a fixture-driven pytest suite** (`tests/`) covering the parsers (CPU, memory, process, battery, network), delta calculations, collectors, the ADB discovery/connection layers, the package-identity resolver/service, the application inventory (pm list + dumpsys parsers, collector, capability gate), the network investigation, the incident report layer (builder, JSON/HTML renderers, GUI panel/dialog/worker), the investigation core (drift stability, timeline, attribution, why-flagged evidence, process tree), device information (getprop/wm/df parsing, collector, Device page), the device report export layer (determinism, integrity, privacy exclusions, worker, GUI flow), baseline persistence (per-device store, atomic writes, corrupt/wrong-device handling, GUI auto-load), the diagnostics engine (rules, evaluation, Diagnostics page, overview/device annotations), the GUI (widgets, sidebar navigation, overview/findings/device/applications pages, setup flow, actions, workers), and the reliability layer (diagnostics core and redaction, ADB device-loss mapping and reconnect behavior, monitor stale-data invalidation, worker error observability, the Diagnostics dialog).
 
 - Runs entirely against **fixed fixtures based on verified Vivo V2026 output — no physical device required**.
 - **GUI tests run headlessly** via Qt's `offscreen` platform plugin (`QT_QPA_PLATFORM=offscreen`): they construct widgets, deliver snapshots, drive the monitor worker, and cover the first-run setup flow (each connection state, the multi-device picker, ADB discovery) without a display.
@@ -398,7 +418,8 @@ Both builds embed the product icon (`packaging/assets/atm.ico`) and a Windows ve
 
 | Release | Assets |
 | --- | --- |
-| [v0.5.0](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/tag/v0.5.0) *(current)* | `AndroidTaskManager.exe` · `AndroidTaskManager-debug.exe` · `SHA256SUMS.txt` |
+| [v0.6.0](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/tag/v0.6.0) *(current)* | `AndroidTaskManager.exe` · `AndroidTaskManager-debug.exe` · `SHA256SUMS.txt` |
+| [v0.5.0](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/tag/v0.5.0) | `AndroidTaskManager.exe` · `AndroidTaskManager-debug.exe` · `SHA256SUMS.txt` |
 | [v0.4.0](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/tag/v0.4.0) | [`AndroidTaskManager.exe`](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/download/v0.4.0/AndroidTaskManager.exe) — 48,581,300 bytes, SHA-256 `193b97291bb69791c67e3217ae412b37941b7a78e3438746789b73dd619207be` · `AndroidTaskManager-debug.exe` · `SHA256SUMS.txt` |
 | [v0.3.0](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/tag/v0.3.0) | earlier build |
 | [v0.2.0](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/tag/v0.2.0) | earlier build |
@@ -406,7 +427,7 @@ Both builds embed the product icon (`packaging/assets/atm.ico`) and a Windows ve
 
 Every release publishes its executables **together with `SHA256SUMS.txt`**, and the product website shows the checksum of the exact published EXE — so you can verify what you downloaded. Release pages: <https://github.com/kalyandhoni234-hash/Android-task-manager/releases>
 
-> **Version note:** `v0.4.5`–`v0.4.8` were **internal development checkpoints** (Phase 1 — diagnostics, ADB reliability, worker observability, engineering quality; Phase 2A — device information architecture; Phase 2B — CPU & hardware intelligence; Phase 2C — GPU & display intelligence; Phase 2D — battery & storage intelligence: static battery facts (design capacity, cycle count) and the internal-volume filesystem type; dynamic battery data stays with the live battery monitor; plus the device diagnostics engine & page, device report export, per-device baseline persistence and release hygiene). No release was published for any of them; the first public release of this work is **v0.5.0** (current). **v0.6.0** is the in-development checkpoint adding the live dashboard (CPU/RAM/Battery/Storage trends on the Overview page), the live storage metric (its own slow monitor cadence), the process-table UID column, and the `--storage-interval` flag; it has not been tagged or released yet.
+> **Version note:** `v0.4.5`–`v0.4.8` were **internal development checkpoints** (Phase 1 — diagnostics, ADB reliability, worker observability, engineering quality; Phase 2A — device information architecture; Phase 2B — CPU & hardware intelligence; Phase 2C — GPU & display intelligence; Phase 2D — battery & storage intelligence: static battery facts (design capacity, cycle count) and the internal-volume filesystem type; dynamic battery data stays with the live battery monitor; plus the device diagnostics engine & page, device report export, per-device baseline persistence and release hygiene). No release was published for any of them. **v0.6.0** shipped the live dashboard (CPU/RAM/Battery/Storage trends on the Overview page), the live storage metric, the process-table UID column and the `--storage-interval` flag. **v0.7.0** is the in-development checkpoint adding the **applications manager** (installed-app inventory, per-package details via `dumpsys package`, capability-gated Enable/Disable/Uninstall actions with explicit confirmations, and process → application navigation); it has not been tagged or released yet.
 
 ## 🌐 Product Website
 
