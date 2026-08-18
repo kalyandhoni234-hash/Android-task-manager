@@ -2,7 +2,7 @@
 
 # Android Task Manager
 
-**A live Android/Linux system monitor for your PC — CPU, memory, processes, battery and network, pulled from a connected Android device over ADB — with a package-verified application manager (open, info, force stop, enable/disable, uninstall).**
+**A live Android/Linux system monitor for your PC — CPU, memory, processes, battery and network, pulled from a connected Android device over ADB — with a package-verified application manager (open, info, force stop, enable/disable, uninstall) and a deterministic device-intelligence layer (health engine, event timeline, monitoring rules, recommendations and safe, approved automation).**
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![GUI](https://img.shields.io/badge/GUI-PySide6-41CD52?style=flat-square&logo=qt&logoColor=white)](https://doc.qt.io/qtforpython-6/)
@@ -15,7 +15,7 @@
 
 **Get it — no Python required:**
 
-[![Download for Windows](https://img.shields.io/badge/Download-AndroidTaskManager.exe-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/download/v0.6.0/AndroidTaskManager.exe)
+[![Download for Windows](https://img.shields.io/badge/Download-AndroidTaskManager.exe-0078D6?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/download/v0.7.0/AndroidTaskManager.exe)
 [![Product website](https://img.shields.io/badge/Product-Website-white?style=for-the-badge&logo=github&logoColor=white)](https://kalyandhoni234-hash.github.io/Android-task-manager/)
 [![Releases](https://img.shields.io/badge/GitHub-Releases-white?style=for-the-badge&logo=github&logoColor=white)](https://github.com/kalyandhoni234-hash/Android-task-manager/releases)
 
@@ -30,9 +30,9 @@ Android Task Manager turns *your* PC into a window into *your* Android device. T
 Two ways to use it:
 
 - **Terminal mode** — a dependency-light interactive dashboard (CPU / memory / processes / battery / network) with per-reader sampling cadences you control.
-- **Desktop GUI (PySide6)** — a live dashboard with history graphs, a selectable process table, an on-demand **Process Inspector** (`/proc/<pid>`), a per-process **Network Connections** investigation (socket tables), a **Diagnostics** page (evidence-based device health findings), a per-device **baseline persistence** store, an **exportable device report**, an **Applications manager** (installed-app inventory with per-package details and capability-gated device actions), and explicit, package-verified device actions: **Open App**, **App Info**, **Force Stop**, **Enable/Disable**, **Uninstall**.
+- **Desktop GUI (PySide6)** — a live dashboard with history graphs, a selectable process table, an on-demand **Process Inspector** (`/proc/<pid>`), a per-process **Network Connections** investigation (socket tables), a **Diagnostics** page (evidence-based device health findings), a per-device **baseline persistence** store, an **exportable device report**, an **Applications manager** (installed-app inventory with per-package details and capability-gated device actions), explicit, package-verified device actions: **Open App**, **App Info**, **Force Stop**, **Enable/Disable**, **Uninstall** — and a **Device Intelligence** page (device health score, findings, event timeline, monitoring rules, recommendations, and approved, non-destructive automation).
 
-Monitoring and inspection are **read-only**. The only interactive operations are the six device actions, each requires an explicit selection, each runs only against a package whose identity has been verified against the device's installed-package list, and the destructive ones (force stop, disable, uninstall) require an explicit confirmation that names the exact target package.
+Monitoring and inspection are **read-only**. The only interactive operations are the six device actions, each requires an explicit selection, each runs only against a package whose identity has been verified against the device's installed-package list, and the destructive ones (force stop, disable, uninstall) require an explicit confirmation that names the exact target package. Automation (v0.8) never runs a destructive action, ever — its targets must be verified installed *and* user-category packages, and every automated action still requires the user's explicit Apply click.
 
 ## ✨ Features
 
@@ -88,6 +88,18 @@ Monitoring and inspection are **read-only**. The only interactive operations are
 - Selecting a row reads **per-package details** on demand (`dumpsys package`): version name/code, UID, APK path, install location, installer, enabled state, launch activity, and component counts (activities/services/receivers), parsed with the resolver-table headers matched by action AND category intent so launcher detection never depends on one header's wording.
 - The details panel carries the capability-gated action row (Open / Info / Force Stop / Disable|Enable / Uninstall) and an **Audit Permissions** button reusing the shared permission worker.
 - **Process → Application flow:** the Process Inspector's **Manage** button jumps from a verified process to its application row, with details selected even when the inventory is stale (falls back to a direct read).
+
+### 🧠 Device Intelligence *(v0.8)*
+
+A deterministic intelligence core that turns the already-collected monitoring data into structure and safe action — **no AI, no model, no cloud**: every engine is a pure function of the typed snapshots the monitor already produced, so the page adds zero ADB traffic of its own.
+
+- **Historical metrics** (`history/`) — bounded, per-session windows of CPU / memory / battery / storage samples (with per-metric bounds), statistics (min/max/mean/last), trends, peak periods and sustained-run analysis; consecutive identical values are deduplicated so a steady device never grows the window artificially.
+- **Device health** (`health/`) — a deterministic `evaluate_device_health` engine scores the current snapshots into a 0–100 overall score and per-component statuses (CPU, memory, battery, storage, processes, applications, connectivity) with typed findings (severity, component, evidence). Missing data produces **no finding and no score contribution** — unavailable components are never converted into false health claims, and a device with no readable evidence reports an honest "unavailable" status.
+- **Event timeline** (`timeline/`) — a bounded (256-event) chronological history of the session: session start, device connect/disconnect, health changes, rule fires, recommendations and executed actions, each with a deterministic `T-###` id, monotonic + wall-clock timestamps (missing clocks are never fabricated) and deduplicated state transitions.
+- **Monitoring rules** (`rules/`) — a rule engine over the session history: metric / operator (`GE`/`GT`/`LE`/`LT`) / threshold / duration (sustained runs) / severity / anti-storm cooldown. Seven built-in rules cover CPU and memory highs (immediate + sustained), battery low/critical and storage high; thresholds come exclusively from the canonical `thresholds.py` module — never restated in the GUI.
+- **Recommendations** (`recommend/`) — deterministic finding-to-action mapping: informational guidance for CPU/memory/battery/storage/connectivity, plus per-process `force_stop` proposals for heavy user apps. Targets are proposed only when the process name is a **verified installed package** (identity link to the v0.7 inventory) **and** a **user-category package** (system/protected apps never receive destructive proposals).
+- **Controlled automation** (`automation/`) — an approval-gated scheduler over the recommendations: the user's **Apply** click is the explicit approval; the engine then enforces target validation (fails closed), per-(action, target) cooldowns, a per-session execution budget (loop protection) and session scoping. **Destructive actions never run through automation**, even after approval, and the executor is the same v0.7 action worker — every automated action has the exact safety guarantees of a manual one.
+- **Finding navigation** — a recommendation row's **View app** jumps to the affected application's details page (verified identity re-checked at the window; the `dumpsys` read runs on the existing apps worker).
 
 ### 🌐 Network Monitoring
 
@@ -185,6 +197,8 @@ The key architectural rule: **collectors never invoke `subprocess` directly.** A
 - **Verified package identity.** No device action runs without the target being positively verified against the device's installed-package list; stale identities are invalidated immediately when a device action reports a package as no longer installed.
 - **Capability-gated destructive controls.** System applications never receive uninstall/disable requests — the gate is enforced in the widget and re-checked at the window before dispatch.
 - **No fabricated data.** A value that cannot be read is reported as `N/A` — never an invented zero. Kernel threads show `N/A` memory (a kernel property); permission-protected `/proc/<pid>/io` shows `N/A`.
+- **Intelligence never fabricates evidence.** The health engine derives findings only from readable data: unavailable metrics contribute no score and no finding; a device with nothing readable reports "unavailable", never a plausible failure.
+- **Automation is approval-gated and never destructive.** Every automated action needs an explicit Apply click, valid package target, and clean cooldown/budget gates; destructive actions (force stop, disable, uninstall) are excluded from automation by construction, and system/protected applications are excluded from recommendation targets entirely.
 - **Validated inputs.** PIDs must be positive integers before any `/proc/<pid>` path is built; device-side paths are fixed constants, never user-interpolated strings.
 - **Honest semantics.** "Resident" is `VmRSS`, not PSS (shared pages are double-counted) — the UI and docs say so. Socket attribution is by UID, not PID (Android's limitation), and the tool says so.
 - **Single blindingly obvious source of truth:** `src/android_task_manager/__init__.py` (`__version__`) drives the package version, the Windows EXE version resource and the release tag.
@@ -214,6 +228,12 @@ android-task-manager/
 │   ├── memory/                       # /proc/meminfo parsing, collector
 │   ├── battery/                      # dumpsys battery parsing (status/health enums), collector
 │   ├── network/                      # /proc/net/dev parsing, delta throughput, collector
+│   ├── history/                      # v0.8: bounded session metric history (stats/trends/peaks)
+│   ├── health/                       # v0.8: device health engine (score, components, findings)
+│   ├── timeline/                     # v0.8: bounded event timeline (session transitions)
+│   ├── rules/                        # v0.8: monitoring rule engine (cooldowns, durations)
+│   ├── recommend/                    # v0.8: deterministic finding→recommendation mapping
+│   ├── automation/                   # v0.8: approval-gated, cooldown-bounded action scheduler
 │   ├── process/                      # ps identity + top metrics, classification, and the
 │   │                                 #   read-only /proc/<pid> inspector (inspector_* modules)
 │   ├── network_investigation/        # socket tables (tcp{,6},udp{,6}) + UID attribution
@@ -243,8 +263,8 @@ android-task-manager/
 ├── packaging/                        # build_windows.ps1, icon + version-resource assets,
 │   │                                 #   entry stubs (entry_gui.py / entry_console.py)
 ├── docs/                             # ADRs (incident reporting, investigation core,
-│                                     #   device management) + engineering research
-│                                     #   (m14-network-research.md)
+│                                     #   device management, device intelligence) +
+│                                     #   engineering research (m14-network-research.md)
 ├── android-task-manager-website/     # Next.js product website (static export -> out/)
 ├── .github/workflows/                # ci.yml · release.yml · deploy-pages.yml
 ├── pyproject.toml                    # single version authority (dynamic from __init__.py)
@@ -349,6 +369,7 @@ The dashboard is organized by a persistent **sidebar** with nine pages, plus a t
 - **Device** — an "About phone" style information dashboard: device summary, basic information (manufacturer/brand/model/device/product/board/hardware/SoC), Android/software (version, API level, security patch, build ID/number, kernel, bootloader, baseband), CPU/hardware (processor, architecture, cores, max frequency), memory, battery, storage (internal `/data` volume with usage bar), display (resolution, density, refresh rate, orientation) and identifiers (Android ID, Wi-Fi/Bluetooth MAC). Static facts are collected **once per connection session** from `getprop`/`wm`/`df`/`dumpsys`; battery/memory/CPU reuse the existing collectors' snapshots — the Device page never runs its own polling. An **Export Device Report** button writes the deterministic, integrity-checked JSON artifact (see [Device Report Export](#-device-report-export-gui)).
 - **Health** — CPU (utilization + per-core bars + history), memory (available + breakdown + history), battery (level + history).
 - **Diagnostics** — the diagnostics engine's findings severity-first (CRITICAL → WARNING → INFO), each card showing WHAT / WHY / EVIDENCE / RECOMMENDED ACTION in full; the page distinguishes "no device connected" from "no issues detected".
+- **Intelligence** — the v0.8 device-intelligence page: DEVICE HEALTH (overall score + per-component status), RECOMMENDATIONS (each with **View app** navigation and an **Apply** button), TIMELINE (bounded session event log), RULE ALERTS (fired monitoring rules) and AUTOMATION (task history with status). Everything is driven by the monitor's existing snapshot signals — the page owns no polling, no timers and no ADB calls of its own.
 
 Missing values render as **N/A — unavailable on this device**; nothing is guessed or inferred. Long values (e.g. build fingerprint) are shortened on screen with the full value in the tooltip. When the device disconnects the Device page empties to a "NO DEVICE CONNECTED" state — no stale values survive a device switch.
 
@@ -368,7 +389,7 @@ Device facts come from standard Android system properties and read-only commands
 python -m pytest
 ```
 
-The suite: **a fixture-driven pytest suite** (`tests/`) covering the parsers (CPU, memory, process, battery, network), delta calculations, collectors, the ADB discovery/connection layers, the package-identity resolver/service, the application inventory (pm list + dumpsys parsers, collector, capability gate), the network investigation, the incident report layer (builder, JSON/HTML renderers, GUI panel/dialog/worker), the investigation core (drift stability, timeline, attribution, why-flagged evidence, process tree), device information (getprop/wm/df parsing, collector, Device page), the device report export layer (determinism, integrity, privacy exclusions, worker, GUI flow), baseline persistence (per-device store, atomic writes, corrupt/wrong-device handling, GUI auto-load), the diagnostics engine (rules, evaluation, Diagnostics page, overview/device annotations), the GUI (widgets, sidebar navigation, overview/findings/device/applications pages, setup flow, actions, workers), and the reliability layer (diagnostics core and redaction, ADB device-loss mapping and reconnect behavior, monitor stale-data invalidation, worker error observability, the Diagnostics dialog).
+The suite: **a fixture-driven pytest suite** (`tests/`) covering the parsers (CPU, memory, process, battery, network), delta calculations, collectors, the ADB discovery/connection layers, the package-identity resolver/service, the application inventory (pm list + dumpsys parsers, collector, capability gate), the network investigation, the incident report layer (builder, JSON/HTML renderers, GUI panel/dialog/worker), the investigation core (drift stability, timeline, attribution, why-flagged evidence, process tree), device information (getprop/wm/df parsing, collector, Device page), the device report export layer (determinism, integrity, privacy exclusions, worker, GUI flow), baseline persistence (per-device store, atomic writes, corrupt/wrong-device handling, GUI auto-load), the diagnostics engine (rules, evaluation, Diagnostics page, overview/device annotations), the v0.8 device-intelligence layer (history windows, health engine, event timeline, rule engine, recommendation engine with identity + system-app protection, automation gates/cooldowns/loop protection, and the Intelligence page flows — navigation, apply, cooldowns, reconnect, boundedness), the GUI (widgets, sidebar navigation, overview/findings/device/applications pages, setup flow, actions, workers), and the reliability layer (diagnostics core and redaction, ADB device-loss mapping and reconnect behavior, monitor stale-data invalidation, worker error observability, the Diagnostics dialog).
 
 - Runs entirely against **fixed fixtures based on verified Vivo V2026 output — no physical device required**.
 - **GUI tests run headlessly** via Qt's `offscreen` platform plugin (`QT_QPA_PLATFORM=offscreen`): they construct widgets, deliver snapshots, drive the monitor worker, and cover the first-run setup flow (each connection state, the multi-device picker, ADB discovery) without a display.
@@ -419,7 +440,8 @@ Both builds embed the product icon (`packaging/assets/atm.ico`) and a Windows ve
 
 | Release | Assets |
 | --- | --- |
-| [v0.6.0](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/tag/v0.6.0) *(current)* | `AndroidTaskManager.exe` · `AndroidTaskManager-debug.exe` · `SHA256SUMS.txt` |
+| [v0.7.0](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/tag/v0.7.0) *(current)* | `AndroidTaskManager.exe` · `AndroidTaskManager-debug.exe` · `SHA256SUMS.txt` |
+| [v0.6.0](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/tag/v0.6.0) | `AndroidTaskManager.exe` · `AndroidTaskManager-debug.exe` · `SHA256SUMS.txt` |
 | [v0.5.0](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/tag/v0.5.0) | `AndroidTaskManager.exe` · `AndroidTaskManager-debug.exe` · `SHA256SUMS.txt` |
 | [v0.4.0](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/tag/v0.4.0) | [`AndroidTaskManager.exe`](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/download/v0.4.0/AndroidTaskManager.exe) — 48,581,300 bytes, SHA-256 `193b97291bb69791c67e3217ae412b37941b7a78e3438746789b73dd619207be` · `AndroidTaskManager-debug.exe` · `SHA256SUMS.txt` |
 | [v0.3.0](https://github.com/kalyandhoni234-hash/Android-task-manager/releases/tag/v0.3.0) | earlier build |
@@ -428,7 +450,7 @@ Both builds embed the product icon (`packaging/assets/atm.ico`) and a Windows ve
 
 Every release publishes its executables **together with `SHA256SUMS.txt`**, and the product website shows the checksum of the exact published EXE — so you can verify what you downloaded. Release pages: <https://github.com/kalyandhoni234-hash/Android-task-manager/releases>
 
-> **Version note:** `v0.4.5`–`v0.4.8` were **internal development checkpoints** (Phase 1 — diagnostics, ADB reliability, worker observability, engineering quality; Phase 2A — device information architecture; Phase 2B — CPU & hardware intelligence; Phase 2C — GPU & display intelligence; Phase 2D — battery & storage intelligence: static battery facts (design capacity, cycle count) and the internal-volume filesystem type; dynamic battery data stays with the live battery monitor; plus the device diagnostics engine & page, device report export, per-device baseline persistence and release hygiene). No release was published for any of them. **v0.6.0** shipped the live dashboard (CPU/RAM/Battery/Storage trends on the Overview page), the live storage metric, the process-table UID column and the `--storage-interval` flag. **v0.7.0** is the in-development checkpoint adding the **applications manager** (installed-app inventory, per-package details via `dumpsys package`, capability-gated Enable/Disable/Uninstall actions with explicit confirmations, and process → application navigation); it has not been tagged or released yet.
+> **Version note:** `v0.4.5`–`v0.4.8` were **internal development checkpoints** (Phase 1 — diagnostics, ADB reliability, worker observability, engineering quality; Phase 2A — device information architecture; Phase 2B — CPU & hardware intelligence; Phase 2C — GPU & display intelligence; Phase 2D — battery & storage intelligence: static battery facts (design capacity, cycle count) and the internal-volume filesystem type; dynamic battery data stays with the live battery monitor; plus the device diagnostics engine & page, device report export, per-device baseline persistence and release hygiene). No release was published for any of them. **v0.6.0** shipped the live dashboard (CPU/RAM/Battery/Storage trends on the Overview page), the live storage metric, the process-table UID column and the `--storage-interval` flag. **v0.7.0** shipped the **applications manager** (installed-app inventory, per-package details via `dumpsys package`, capability-gated Enable/Disable/Uninstall actions with explicit confirmations, and process → application navigation). **v0.8.0** is the in-development checkpoint adding **device intelligence & controlled automation** (historical metrics, health engine, event timeline, monitoring rules, recommendations, and approval-gated non-destructive automation on the new Intelligence page); it has not been tagged or released yet.
 
 ## 🌐 Product Website
 
