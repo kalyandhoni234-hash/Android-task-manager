@@ -53,6 +53,7 @@ from ..network_investigation.models import NetworkInvestigationSnapshot
 from ..permissions.models import PackagePermissionAudit
 from ..process.inspector_models import ProcessInspectionSnapshot
 from ..process.models import ProcessSnapshot
+from ..storage.models import StorageSnapshot
 from ..updater import UpdateCheckResult
 from .connection_strip import ConnectionStrip
 from .device_page import DevicePage
@@ -81,6 +82,14 @@ from .widgets.process_widget import ProcessWidget
 def _fmt_when(value) -> str:
     """Local-time, second-resolution timestamp for overview facts."""
     return value.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _memory_used_percent(memory: MemorySnapshot | None) -> float | None:
+    """Used share of total RAM (used = total − available); None when unknown."""
+    if memory is None or memory.total_kb <= 0:
+        return None
+    used = max(0, memory.total_kb - memory.available_kb)
+    return used / memory.total_kb * 100
 
 
 class MainWindow(QMainWindow):
@@ -162,6 +171,10 @@ class MainWindow(QMainWindow):
         self._latest_cpu: CPUSnapshot | None = None
         self._latest_memory: MemorySnapshot | None = None
         self._latest_battery: BatterySnapshot | None = None
+
+        #: Most recent live storage snapshot (internal /data volume),
+        #: published by the monitor on its own slow cadence.
+        self._latest_storage: StorageSnapshot | None = None
 
         #: Most recent NetworkInvestigationSnapshot, kept so process
         #: inspections can render the UID-attributed socket view.
@@ -383,6 +396,22 @@ class MainWindow(QMainWindow):
                 diagnostics_info=(
                     report.counts[DiagnosticSeverity.INFO] if report is not None else None
                 ),
+                cpu_percent=(
+                    self._latest_cpu.aggregate_utilization_percent
+                    if self._latest_cpu is not None
+                    else None
+                ),
+                memory_used_percent=_memory_used_percent(self._latest_memory),
+                battery_level_percent=(
+                    self._latest_battery.level_percent
+                    if self._latest_battery is not None
+                    else None
+                ),
+                storage_used_percent=(
+                    self._latest_storage.used_percent
+                    if self._latest_storage is not None
+                    else None
+                ),
             )
         )
 
@@ -486,6 +515,12 @@ class MainWindow(QMainWindow):
         self._observation_tracker.record_network_snapshot(snapshot)
         self._refresh_overview()
 
+    def update_storage(self, snapshot: StorageSnapshot | None) -> None:
+        """Adopt the monitor's latest storage snapshot (None = unavailable)."""
+        self._latest_storage = snapshot
+        self._refresh_overview()
+        self._refresh_device_page()
+
     def update_devices(self, devices: list[dict[str, str]]) -> None:
         """Fill the multi-device picker on the setup screen."""
         self.setup.set_devices(devices)
@@ -504,6 +539,7 @@ class MainWindow(QMainWindow):
             self._latest_cpu = None
             self._latest_memory = None
             self._latest_battery = None
+            self._latest_storage = None
             self._latest_processes = None
             self._latest_network_investigation = None
             self._diagnostics_report = None
@@ -1054,6 +1090,7 @@ def wire(window: MainWindow, worker: MonitorWorker) -> None:
     """Connect a MonitorWorker's signals to the MainWindow slots."""
     worker.snapshots.connect(window.update_snapshots)
     worker.network_investigation.connect(window.update_network_investigation)
+    worker.storage_snapshot.connect(window.update_storage)
     worker.device_info.connect(window.update_device)
     worker.device_information.connect(window.update_device_information)
     worker.connection_changed.connect(window.update_connection)
