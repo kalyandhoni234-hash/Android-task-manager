@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
@@ -55,6 +56,9 @@ class IntelligencePage(QWidget):
 
     #: (Recommendation) the user asked to apply a recommendation's action.
     apply_requested = Signal(object)
+
+    #: (str package name) the user asked to open the affected application.
+    navigate_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -195,13 +199,23 @@ class IntelligencePage(QWidget):
             action_line.setObjectName("recommendationAction")
             action_line.setTextFormat(Qt.TextFormat.PlainText)
             layout.addWidget(action_line)
+            actions = QHBoxLayout()
+            actions.setSpacing(8)
+            view = QPushButton("View app")
+            view.setObjectName("recommendationView")
+            view.setCursor(Qt.CursorShape.PointingHandCursor)
+            view.clicked.connect(
+                lambda checked=False, target=recommendation.target: self.navigate_requested.emit(target)
+            )
+            actions.addWidget(view, alignment=Qt.AlignmentFlag.AlignLeft)
             apply = QPushButton("Apply")
             apply.setObjectName("recommendationApply")
             apply.setCursor(Qt.CursorShape.PointingHandCursor)
             apply.clicked.connect(
                 lambda checked=False, rec=recommendation: self.apply_requested.emit(rec)
             )
-            layout.addWidget(apply, alignment=Qt.AlignmentFlag.AlignRight)
+            actions.addWidget(apply, alignment=Qt.AlignmentFlag.AlignRight)
+            layout.addLayout(actions)
         return frame
 
     def _render_timeline(self, events: tuple[TimelineEvent, ...]) -> None:

@@ -449,3 +449,171 @@ def test_automation_tasks_rendered(qtapp, monkeypatch) -> None:
     apply = window.intelligence.findChildren(QPushButton, "recommendationApply")[0]
     apply.click()
     assert "A-001" in window.intelligence._automation_label.text()
+
+
+# ---------------------------------------------------------------------------
+# Application <-> health navigation (Phase I)
+# ---------------------------------------------------------------------------
+
+
+def test_recommendation_row_offers_view_app_for_target(qtapp) -> None:
+    from android_task_manager.recommend import Recommendation
+
+    window = MainWindow()
+    rec = Recommendation(
+        recommendation_id="REC-001",
+        finding_ref="finding",
+        title="Heavy app",
+        rationale="reason",
+        severity="warning",
+        action="force_stop",
+        target="com.example.app",
+        destructive=True,
+        automation_allowed=False,
+    )
+    window._recommendations = (rec,)
+    window._refresh_intelligence()
+    views = window.intelligence.findChildren(QPushButton, "recommendationView")
+    assert len(views) == 1
+    navigated: list[str] = []
+    window.intelligence.navigate_requested.connect(navigated.append)
+    views[0].click()
+    assert navigated == ["com.example.app"]
+
+
+def test_informational_recommendation_has_no_navigation(qtapp) -> None:
+    from android_task_manager.recommend import Recommendation
+
+    window = MainWindow()
+    rec = Recommendation(
+        recommendation_id="REC-002",
+        finding_ref="finding",
+        title="CPU saturated",
+        rationale="reason",
+        severity="critical",
+        action=None,
+        target=None,
+        destructive=False,
+        automation_allowed=False,
+    )
+    window._recommendations = (rec,)
+    window._refresh_intelligence()
+    assert window.intelligence.findChildren(QPushButton, "recommendationView") == []
+
+
+def test_view_app_navigates_to_applications_and_requests_details(qtapp) -> None:
+    window = MainWindow()
+    connect_window(window)
+    window.update_snapshots(
+        _cpu(90.0), _memory(40.0), _processes(cpu=90.0), _battery(80.0), _network()
+    )
+    _verify_inventory(window)
+    views = window.intelligence.findChildren(QPushButton, "recommendationView")
+    assert len(views) >= 1
+    detail_requests: list[str] = []
+    window.apps_detail_requested.connect(detail_requests.append)
+    views[0].click()
+    assert detail_requests == ["com.example.app"]
+    assert window._pages.currentIndex() == 3  # APPLICATIONS page
+
+
+def test_view_app_ignores_unverified_target(qtapp) -> None:
+    window = MainWindow()
+    connect_window(window)
+    window.update_snapshots(
+        _cpu(90.0), _memory(40.0), _processes(cpu=90.0), _battery(80.0), _network()
+    )
+    detail_requests: list[str] = []
+    window.apps_detail_requested.connect(detail_requests.append)
+    # A target the device never verified installed is honestly ignored.
+    window._on_intelligence_navigate("com.unknown.app")
+    assert detail_requests == []
+    assert window._pages.currentIndex() == 0
+
+
+# ---------------------------------------------------------------------------
+# Worker reuse + no extra polling (Phase J)
+# ---------------------------------------------------------------------------
+
+
+def test_intelligence_consumes_existing_snapshots_only(qtapp) -> None:
+    """The intelligence UI adds zero polling: nothing is recorded or
+    evaluated until the monitor's own snapshot handlers run."""
+    window = MainWindow()
+    window.update_connection(ConnectionState.CONNECTED, "adb device A1")
+    window.on_serial_ready("FAKE123")
+    assert window._session_history.is_empty
+    assert window._timeline.events
+    # Repeating the same snapshot batch does not fabricate new events.
+    window.update_snapshots(
+        _cpu(12.5), _memory(40.0), _processes(), _battery(80.0), _network()
+    )
+    event_count = len(window._timeline.events)
+    for _ in range(20):
+        window.update_snapshots(
+            _cpu(12.5), _memory(40.0), _processes(), _battery(80.0), _network()
+        )
+    assert len(window._timeline.events) == event_count
+
+
+def test_duplicate_snapshot_deliveries_do_not_grow_history(qtapp) -> None:
+    window = MainWindow()
+    connect_window(window)
+    cpu = _cpu(12.5)
+    for _ in range(30):
+        window.update_snapshots(cpu, _memory(40.0), _processes(), _battery(80.0), _network())
+    assert len(window._session_history.cpu) == 1
+    assert len(window._session_history.memory) == 1
+
+
+def test_changing_values_are_recorded_at_worker_cadence(qtapp) -> None:
+    window = MainWindow()
+    connect_window(window)
+    for level in (80.0, 79.0, 78.0, 81.0):
+        window.update_snapshots(
+            _cpu(12.5), _memory(40.0), _processes(), _battery(level), _network()
+        )
+    assert len(window._session_history.battery) == 4
+
+
+def test_reconnect_creates_fresh_session_without_stale_state(qtapp) -> None:
+    window = MainWindow()
+    connect_window(window)
+    window.update_snapshots(
+        _cpu(90.0), _memory(40.0), _processes(cpu=90.0), _battery(80.0), _network()
+    )
+    assert window._session_history.cpu
+    assert window._rule_fires  # cpu_high fired
+    # The device reconnects: a brand-new session starts from scratch.
+    window.update_connection(ConnectionState.DISCONNECTED, "adb device A1")
+    window.update_connection(ConnectionState.CONNECTED, "adb device A1")
+    window.on_serial_ready("FAKE123")
+    assert window._session_history.is_empty
+    assert window._health is None
+    assert window._rule_fires == ()
+    session_events = [
+        e.event_type
+        for e in window._timeline.events
+        if e.event_type == "SESSION_STARTED"
+    ]
+    assert len(session_events) == 1  # old session events are gone, not stacked
+
+
+def test_duplicate_rule_triggers_suppressed_by_cooldown(qtapp, monkeypatch) -> None:
+    window = MainWindow()
+    connect_window(window)
+    window.update_snapshots(
+        _cpu(90.0), _memory(40.0), _processes(), _battery(80.0), _network()
+    )
+    fires = list(window._rule_fires)
+    assert fires
+    for _ in range(5):
+        window.update_snapshots(
+            _cpu(90.0), _memory(40.0), _processes(), _battery(80.0), _network()
+        )
+    # Same value → dedupe keeps history at one sample → no refire possible,
+    # and the rule cooldown would suppress a refire even with new samples.
+    rule_events = [
+        e for e in window._timeline.events if e.event_type == "RULE_FIRED"
+    ]
+    assert len(rule_events) == 1

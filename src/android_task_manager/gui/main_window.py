@@ -403,6 +403,7 @@ class MainWindow(QMainWindow):
         self.diagnostics_page = DiagnosticsPage()
         self.intelligence = IntelligencePage()
         self.intelligence.apply_requested.connect(self._on_recommendation_applied)
+        self.intelligence.navigate_requested.connect(self._on_intelligence_navigate)
         self.device_page.export_requested.connect(self._on_device_report_export_requested)
 
         self._pages = QStackedWidget()
@@ -1009,6 +1010,20 @@ class MainWindow(QMainWindow):
                 entity=result.package_name,
             )
         self._refresh_intelligence()
+
+    def _on_intelligence_navigate(self, package: str) -> None:
+        """Open the affected application's details from a recommendation.
+
+        Identity is re-verified against the installed inventory before
+        anything is requested (defense in depth: the recommendation only
+        exists for verified packages, and the check is cheap here). The
+        detail read itself runs on the apps worker's thread — no ADB work
+        on the GUI thread. Unknown targets are honestly ignored.
+        """
+        if package not in self._verified_packages:
+            return
+        self._on_page_requested("applications")
+        self.apps_detail_requested.emit(package)
 
     def _on_recommendation_applied(self, recommendation: Recommendation) -> None:
         """Apply a recommendation's action.
