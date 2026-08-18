@@ -617,3 +617,113 @@ def test_duplicate_rule_triggers_suppressed_by_cooldown(qtapp, monkeypatch) -> N
         e for e in window._timeline.events if e.event_type == "RULE_FIRED"
     ]
     assert len(rule_events) == 1
+
+
+# ---------------------------------------------------------------------------
+# Failure / recovery hardening (Phase K)
+# ---------------------------------------------------------------------------
+
+
+def test_disconnect_clears_identity_and_intelligence_state(qtapp) -> None:
+    window = MainWindow()
+    connect_window(window)
+    _verify_inventory(window)
+    window.update_snapshots(
+        _cpu(90.0), _memory(40.0), _processes(cpu=90.0), _battery(80.0), _network()
+    )
+    assert window._health is not None
+    assert window._verified_packages
+    window.update_connection(ConnectionState.DISCONNECTED, "adb device A1")
+    assert window._health is None
+    assert window._recommendations == ()
+    assert window._rule_fires == ()
+    assert window._verified_packages == set()
+    assert window._latest_app_snapshot is None
+    assert window._pending_automation_task is None
+
+
+def test_malformed_all_none_snapshot_degrades_honestly(qtapp) -> None:
+    window = MainWindow()
+    window.update_connection(ConnectionState.CONNECTED, "adb device A1")
+    window.on_serial_ready("FAKE123")
+    # The monitor's all-None snapshot (device lost) must not crash and must
+    # not fabricate a health finding out of missing data.
+    window.update_snapshots(None, None, None, None, None)
+    assert window._health is not None
+    assert window._health.status.value in ("unknown", "unavailable")
+    assert window._health.findings == []
+    assert window._recommendations == ()
+    assert window._session_history.is_empty
+
+
+def test_unavailable_storage_never_becomes_a_finding(qtapp) -> None:
+    window = MainWindow()
+    connect_window(window)  # storage stays None in every delivery
+    assert window._health is not None
+    storage = window._health.components.get("storage")
+    assert storage is not None
+    assert storage.status.value in ("unknown", "unavailable")
+    assert all(f.component != "storage" for f in window._health.findings)
+
+
+def test_package_disappearance_drops_recommendation(qtapp) -> None:
+    window = MainWindow()
+    connect_window(window)
+    window.update_snapshots(
+        _cpu(90.0), _memory(40.0), _processes(cpu=90.0), _battery(80.0), _network()
+    )
+    _verify_inventory(window)
+    assert any(
+        r.action == "force_stop" and r.target == "com.example.app"
+        for r in window._recommendations
+    )
+    # The device reports the package as no longer installed: the verified
+    # set shrinks and the stale target disappears from recommendations.
+    window.on_packages_ready({"com.other.app"})
+    assert all(r.target != "com.example.app" for r in window._recommendations)
+
+
+def test_process_disappearance_clears_process_finding(qtapp) -> None:
+    window = MainWindow()
+    connect_window(window)
+    _verify_inventory(window)
+    window.update_snapshots(
+        _cpu(90.0), _memory(40.0), _processes(cpu=90.0), _battery(80.0), _network()
+    )
+    assert any(
+        r.action == "force_stop" for r in window._recommendations
+    )
+    # The heavy process is gone from the next snapshot: findings are
+    # per-snapshot facts, so the recommendation disappears with it.
+    window.update_snapshots(
+        _cpu(12.5), _memory(40.0), _processes(cpu=5.0), _battery(80.0), _network()
+    )
+    assert all(r.action != "force_stop" for r in window._recommendations)
+
+
+def test_failed_action_records_failure_not_success(qtapp, monkeypatch) -> None:
+    window = MainWindow()
+    connect_window(window)
+    emitted = _wire_automation(window, monkeypatch)
+    window._recommendations = (_automation_ready_recommendation(),)
+    window._refresh_intelligence()
+    apply = window.intelligence.findChildren(QPushButton, "recommendationApply")[0]
+    apply.click()
+    assert emitted == [("enable", "com.example.app")]
+    window.on_action_result(
+        ActionResult(
+            action="enable",
+            package_name="com.example.app",
+            success=False,
+            message="Timeout while waiting for the device.",
+        )
+    )
+    tasks = window._automation.tasks
+    assert tasks[-1].status.value == "failed"
+    assert window._pending_automation_task is None
+    failure_events = [
+        e
+        for e in window._timeline.events
+        if e.event_type == "ACTION_EXECUTED" and "failed" in e.title
+    ]
+    assert len(failure_events) == 1
