@@ -231,8 +231,16 @@ class ApplicationsPage(QWidget):
         return None
 
     def _select_row(self, row: int) -> None:
+        item = self._table.item(row, _COLUMN_PACKAGE)
+        if item is None:
+            return
+        package = item.text()
+        if package == self._selected_package:
+            # Already the current selection: selectRow() would not emit the
+            # selection-changed signal, so request the details directly.
+            self.detail_requested.emit(package)
+            return
         self._table.selectRow(row)
-        self._on_selection_changed()
 
     def _on_selection_changed(self) -> None:
         rows = self._table.selectionModel().selectedRows()
