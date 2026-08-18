@@ -381,11 +381,12 @@ Phase 1 adds three automated checks (also enforced in CI):
 ```bash
 python -m ruff check src tests        # lint (E4/E7/E9, F, I, B)
 python -m mypy src/android_task_manager/core src/android_task_manager/adb \
-  src/android_task_manager/device src/android_task_manager/diagnostics  # type check (enforced scope)
+  src/android_task_manager/device src/android_task_manager/diagnostics \
+  src/android_task_manager/action src/android_task_manager/applications  # type check (enforced scope)
 python -m pip_audit                   # dependency vulnerability audit
 ```
 
-The mypy scope is the pure core + ADB layer plus the device-information and diagnostics packages; the rest of the GUI layer carries pre-existing PySide6 typing debt that is tracked for later phases. `pip-audit` needs the installed environment (`pip install -e ".[dev]"`).
+The mypy scope is the pure core + ADB layer, the device-information and diagnostics packages, and the v0.7 safe-action + applications-inventory packages; the rest of the GUI layer carries pre-existing PySide6 typing debt that is tracked for later phases. `pip-audit` needs the installed environment (`pip install -e ".[dev]"`).
 
 ## CI/CD
 
