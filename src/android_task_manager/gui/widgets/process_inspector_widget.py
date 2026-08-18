@@ -118,6 +118,10 @@ class ProcessInspectorWidget(QWidget):
     #: when the selected process resolved to a verified package identity.
     action_requested = Signal(str, str)
 
+    #: (package) the user asked to manage the resolved application; the
+    #: dashboard navigates to the Applications page with it selected.
+    manage_requested = Signal(str)
+
     #: (package) the user asked to audit a resolved package's permissions.
     permission_audit_requested = Signal(str)
 
@@ -174,12 +178,15 @@ class ProcessInspectorWidget(QWidget):
         self._open_btn = self._make_action_button("Open App")
         self._info_btn = self._make_action_button("App Info")
         self._stop_btn = self._make_action_button("Force Stop", primary=False)
+        self._manage_btn = self._make_action_button("Manage", primary=False)
         action_row.addWidget(self._open_btn)
         action_row.addWidget(self._info_btn)
         action_row.addWidget(self._stop_btn)
+        action_row.addWidget(self._manage_btn)
         self._open_btn.clicked.connect(lambda: self._on_action_clicked("open_app"))
         self._info_btn.clicked.connect(lambda: self._on_action_clicked("app_info"))
         self._stop_btn.clicked.connect(lambda: self._on_action_clicked("force_stop"))
+        self._manage_btn.clicked.connect(self._on_manage_clicked)
         self._status = QLabel("")
         self._status.setObjectName("muted")
         self._status.setWordWrap(True)
@@ -568,12 +575,19 @@ class ProcessInspectorWidget(QWidget):
         self._open_btn.setEnabled(enabled)
         self._info_btn.setEnabled(enabled)
         self._stop_btn.setEnabled(enabled)
+        self._manage_btn.setEnabled(enabled)
 
     def _on_action_clicked(self, action: str) -> None:
         package = self._resolved_package
         if package is None:
             return
         self.action_requested.emit(action, package)
+
+    def _on_manage_clicked(self) -> None:
+        package = self._resolved_package
+        if package is None:
+            return
+        self.manage_requested.emit(package)
 
     # ------------------------------------------------------------------
     # Permissions audit

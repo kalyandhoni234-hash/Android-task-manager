@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from .. import __version__
 from ..action.models import ActionResult
+from ..applications import AppCategory, AppDetails, ApplicationSnapshot
 from ..baseline import (
     BaselineSnapshot,
     BaselineStore,
@@ -55,6 +56,7 @@ from ..process.inspector_models import ProcessInspectionSnapshot
 from ..process.models import ProcessSnapshot
 from ..storage.models import StorageSnapshot
 from ..updater import UpdateCheckResult
+from .apps_page import ApplicationsPage
 from .connection_strip import ConnectionStrip
 from .device_page import DevicePage
 from .diagnostics_dialog import DiagnosticsDialog
@@ -121,6 +123,13 @@ class MainWindow(QMainWindow):
     #: forwards it to the action worker (queued onto that worker's thread).
     action_requested = Signal(str, str)
 
+    #: (package) the user selected an application row; the app forwards it
+    #: to the apps worker's detail read (queued onto its thread).
+    apps_detail_requested = Signal(str)
+
+    #: The user asked to refresh the installed-application inventory.
+    apps_refresh_requested = Signal()
+
     #: The user asked to capture a fresh baseline (BaselineWorker).
     baseline_save_requested = Signal()
     #: (BaselineSnapshot) the user asked to check drift against this baseline.
@@ -159,6 +168,7 @@ class MainWindow(QMainWindow):
         self.processes = ProcessWidget()
         self.battery = BatteryWidget()
         self.network = NetworkWidget()
+        self.apps = ApplicationsPage()
         self.security = BaselinePanel()
         self.incident = IncidentPanel()
 
@@ -231,6 +241,13 @@ class MainWindow(QMainWindow):
 
         self.processes.inspection_requested.connect(self.inspect_requested.emit)
         self.processes.inspector.action_requested.connect(self._on_action_clicked)
+        self.processes.inspector.manage_requested.connect(self._on_manage_requested)
+        self.apps.refresh_requested.connect(self._on_apps_refresh_requested)
+        self.apps.detail_requested.connect(self.apps_detail_requested.emit)
+        self.apps.details.action_requested.connect(self._on_apps_action_clicked)
+        self.apps.details.permission_audit_requested.connect(
+            self.permission_audit_requested.emit
+        )
         self.security.save_requested.connect(self._on_security_save_requested)
         self.security.check_requested.connect(self._on_security_check_requested)
         self.security.export_requested.connect(self._on_export_requested)
@@ -262,11 +279,12 @@ class MainWindow(QMainWindow):
         self._pages.addWidget(self.overview)  # 0: OVERVIEW
         self._pages.addWidget(self._scrolled(self.processes))  # 1: PROCESSES
         self._pages.addWidget(self._scrolled(self.network))  # 2: NETWORK
-        self._pages.addWidget(self._scrolled(self.security))  # 3: BASELINE
-        self._pages.addWidget(self._scrolled(self.findings))  # 4: FINDINGS
-        self._pages.addWidget(self._scrolled(self.device_page))  # 5: DEVICE
-        self._pages.addWidget(self._scrolled(self._health_page()))  # 6: HEALTH
-        self._pages.addWidget(self._scrolled(self.diagnostics_page))  # 7: DIAGNOSTICS
+        self._pages.addWidget(self._scrolled(self.apps))  # 3: APPLICATIONS
+        self._pages.addWidget(self._scrolled(self.security))  # 4: BASELINE
+        self._pages.addWidget(self._scrolled(self.findings))  # 5: FINDINGS
+        self._pages.addWidget(self._scrolled(self.device_page))  # 6: DEVICE
+        self._pages.addWidget(self._scrolled(self._health_page()))  # 7: HEALTH
+        self._pages.addWidget(self._scrolled(self.diagnostics_page))  # 8: DIAGNOSTICS
 
         self.sidebar.set_active(DEFAULT_PAGE)
         self._pages.setCurrentIndex(0)
@@ -321,11 +339,12 @@ class MainWindow(QMainWindow):
             "overview": 0,
             "processes": 1,
             "network": 2,
-            "baseline": 3,
-            "findings": 4,
-            "device": 5,
-            "health": 6,
-            "diagnostics": 7,
+            "applications": 3,
+            "baseline": 4,
+            "findings": 5,
+            "device": 6,
+            "health": 7,
+            "diagnostics": 8,
         }
         index = order.get(key)
         if index is None:
@@ -545,6 +564,7 @@ class MainWindow(QMainWindow):
             self._diagnostics_report = None
             self._device_serial = None
             self.diagnostics_page.refresh(None, False)
+            self.apps.clear()
             self._stack.setCurrentIndex(0)
             self.setup.show_state(state, detail)
         self._refresh_overview()
@@ -633,10 +653,119 @@ class MainWindow(QMainWindow):
     def on_action_result(self, result: ActionResult) -> None:
         """Render the typed action outcome in the inspector panel."""
         self.processes.inspector.show_action_result(result)
+        self.apps.show_action_result(result)
+        if result.success and result.action in ("force_stop", "enable", "disable", "uninstall"):
+            self.apps.set_actions_busy(False)
+            if result.action in ("enable", "disable"):
+                self.apps_detail_requested.emit(result.package_name)
+            self.apps_refresh_requested.emit()
 
     def on_packages_ready(self, packages: set[str]) -> None:
         """Forward the verified package list to the inspector panel."""
         self.processes.inspector.set_packages(packages)
+
+    # ------------------------------------------------------------------
+    # Application inventory handlers (GUI thread; results from AppsWorker)
+    # ------------------------------------------------------------------
+
+    def _on_apps_refresh_requested(self) -> None:
+        """Flip the page into its loading state, then run the inventory
+        read on the apps worker's thread."""
+        self.apps.set_loading()
+        self.apps_refresh_requested.emit()
+
+    def on_apps_inventory_ready(self, snapshot: ApplicationSnapshot) -> None:
+        """Adopt the fresh installed-application inventory."""
+        self.apps.set_snapshot(snapshot)
+        self._refresh_overview()
+
+    def on_apps_inventory_failed(self, message: str) -> None:
+        """Show the honest inventory failure state."""
+        self.apps.show_inventory_failed(message)
+
+    def on_apps_details_ready(self, details: AppDetails) -> None:
+        """Render one application's detail record in the apps panel."""
+        self.apps.show_details(details)
+
+    def on_apps_details_failed(self, package: str, message: str) -> None:
+        """Render the honest detail failure state."""
+        self.apps.show_details_failed(package, message)
+
+    def _on_apps_action_clicked(self, action: str, package: str) -> None:
+        """Gate a clicked application action behind confirmation and
+        capability validation, then forward it.
+
+        The capability gate is re-checked here (defense in depth): a
+        system application can never receive a destructive request even if
+        its button state was computed from stale details. Force Stop,
+        Disable and Uninstall always ask for explicit confirmation that
+        names the target package first.
+        """
+        details = self.apps.details.current_details()
+        if details is None or details.package_name != package:
+            return
+        from ..action import supported_actions
+
+        is_system = details.category is AppCategory.SYSTEM
+        available = supported_actions(is_system=is_system, enabled=details.enabled)
+        if action not in available:
+            return
+        if action == "force_stop" and not self._confirm_apps_action(
+            action, package, "Force Stop Application?"
+        ):
+            return
+        if action == "disable" and not self._confirm_apps_action(
+            action, package, "Disable Application?"
+        ):
+            return
+        if action == "uninstall" and not self._confirm_apps_action(
+            action, package, "Uninstall Application?"
+        ):
+            return
+        self.apps.set_actions_busy(True)
+        self.action_requested.emit(action, package)
+
+    def _confirm_apps_action(self, action: str, package: str, title: str) -> bool:
+        """Ask the user to explicitly confirm a destructive application
+        action; every message names the exact target package."""
+        warnings = {
+            "force_stop": (
+                "The application will be stopped. "
+                "Its background services will not restart until it is opened again."
+            ),
+            "disable": (
+                "The application will be disabled and will not run until re-enabled. "
+                "It remains installed."
+            ),
+            "uninstall": (
+                "The application and its data will be removed from the device. "
+                "This cannot be undone."
+            ),
+        }
+        message = (
+            "This will apply to:\n"
+            f"    {package}\n\n"
+            f"{warnings.get(action, '')}\n\n"
+            "Continue?"
+        )
+        answer = QMessageBox.question(
+            self,
+            title,
+            message,
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def _on_manage_requested(self, package: str) -> None:
+        """Navigate from a process to its application management page.
+
+        The package was verified against the installed list by the process
+        inspector; the applications page selects it (falling back to a
+        direct detail read when its inventory is stale or not yet loaded).
+        """
+        self._on_page_requested("applications")
+        self.apps.select_package(package)
 
     # ------------------------------------------------------------------
     # Baseline & Security handlers (GUI thread; results from BaselineWorker)
@@ -806,9 +935,10 @@ class MainWindow(QMainWindow):
         self.baseline_export_requested.emit(kind, path, session)
 
     def on_permission_audit_ready(self, audit) -> None:
-        """Render an audit result in the inspector and keep a bounded record
-        of recent audits for the incident report."""
+        """Render an audit result in the inspector and the apps panel, and
+        keep a bounded record of recent audits for the incident report."""
         self.processes.inspector.show_permission_audit(audit)
+        self.apps.show_permission_audit(audit)
         self._permission_audits.append(audit)
         if len(self._permission_audits) > 20:
             del self._permission_audits[:-20]
@@ -816,6 +946,7 @@ class MainWindow(QMainWindow):
 
     def on_permission_audit_failed(self, package: str, message: str) -> None:
         self.processes.inspector.show_permission_audit_failed(package, message)
+        self.apps.show_permission_audit_failed(package, message)
 
     # ------------------------------------------------------------------
     # Incident reporting handlers (GUI thread; build + exports)
@@ -1132,6 +1263,25 @@ def wire_actions(window: MainWindow, monitor: MonitorWorker, actions) -> None:
     # a CONNECTED state triggers the package-list refresh there, never on
     # the GUI thread (the old lambda ran in the emitting thread's context).
     monitor.connection_changed.connect(actions.on_connection_changed)
+
+
+def wire_apps(window: MainWindow, monitor: MonitorWorker, apps, actions) -> None:
+    """Connect the application worker to the window, monitor and action
+    worker.
+
+    Inventory refresh requests run on the apps worker's thread (never the
+    GUI); the action worker's installed-set refresh is triggered on the
+    same requests so a successful uninstall/disable is reflected in the
+    process inspector's identity checks immediately.
+    """
+    window.apps_refresh_requested.connect(apps.refresh_inventory)
+    window.apps_refresh_requested.connect(actions.reload_packages)
+    window.apps_detail_requested.connect(apps.request_details)
+    apps.inventory_ready.connect(window.on_apps_inventory_ready)
+    apps.inventory_failed.connect(window.on_apps_inventory_failed)
+    apps.details_ready.connect(window.on_apps_details_ready)
+    apps.details_failed.connect(window.on_apps_details_failed)
+    monitor.connection_changed.connect(apps.on_connection_changed)
 
 
 def wire_security(window: MainWindow, worker) -> None:

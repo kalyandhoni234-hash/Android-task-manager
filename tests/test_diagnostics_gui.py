@@ -205,5 +205,5 @@ def test_diagnostics_dialog_is_not_a_navigation_page(qtapp) -> None:
     window.sidebar.button("health").click()
     window.sidebar.diagnostics_button.click()
     assert window.sidebar.active_page() == "health"
-    assert window._pages.currentIndex() == 6
+    assert window._pages.currentIndex() == 7
     window.close()
