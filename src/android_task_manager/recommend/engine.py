@@ -138,11 +138,19 @@ def _flagged_user_processes(
     *,
     cpu_threshold: float,
     memory_threshold: float | None,
+    installed: set[str] | None = None,
 ) -> tuple[tuple[str, str], ...]:
     """(package, evidence) of user processes at/above the thresholds.
 
     ``cpu_threshold`` selects by CPU; ``memory_threshold`` (when not None)
     selects by memory share. Deterministic: ordered by CPU desc, then PID.
+
+    Identity link (Phase H): when *installed* is given (the verified
+    installed-package set from the v0.7 inventory), a process is only
+    proposed when its name is a *verified installed package* — a spoofed
+    process name never becomes a force-stop target. When the inventory is
+    unknown (``None``), name validity alone is used and the caller knows
+    the identity was not verified.
     """
     if processes is None:
         return ()
@@ -152,6 +160,8 @@ def _flagged_user_processes(
             continue
         name = process.name or ""
         if not is_valid_package_name(name):
+            continue
+        if installed is not None and name not in installed:
             continue
         if process.cpu_percent is not None and process.cpu_percent >= cpu_threshold:
             hits.append(
@@ -182,12 +192,19 @@ def _flagged_user_processes(
 def recommend(
     health: DeviceHealth,
     processes: ProcessSnapshot | None = None,
+    installed_packages: set[str] | None = None,
 ) -> tuple[Recommendation, ...]:
     """Derive deterministic recommendations from *health*.
 
     Ordering: critical first, then warning, then info; within a severity,
     the finding order of the health engine (deterministic). A target is
     never recommended twice.
+
+    *installed_packages* carries the verified installed-package set from
+    the v0.7 application inventory (the process-to-app identity link):
+    heavy-user-process targets are only proposed when verified installed.
+    ``None`` means the inventory is unknown — name validity alone is used,
+    and the caller knows identity was not verified.
     """
     recommendations: list[Recommendation] = []
     seen_targets: set[str] = set()
@@ -210,7 +227,10 @@ def recommend(
                 )
             )
             for package, evidence in _flagged_user_processes(
-                processes, cpu_threshold=CPU_HIGH_PERCENT, memory_threshold=None
+                processes,
+                cpu_threshold=CPU_HIGH_PERCENT,
+                memory_threshold=None,
+                installed=installed_packages,
             ):
                 if package in seen_targets:
                     continue
@@ -225,6 +245,7 @@ def recommend(
                 processes,
                 cpu_threshold=CPU_HIGH_PERCENT,
                 memory_threshold=MEMORY_USED_HIGH_PERCENT,
+                installed=installed_packages,
             ):
                 if package in seen_targets:
                     continue

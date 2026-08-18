@@ -239,9 +239,79 @@ def test_recommendations_rendered_with_apply(qtapp) -> None:
     window.update_snapshots(
         _cpu(90.0), _memory(40.0), _processes(cpu=90.0), _battery(80.0), _network()
     )
+    from android_task_manager.applications.models import (
+        AppCategory,
+        AppInfo,
+        ApplicationSnapshot,
+    )
+
+    window.on_apps_inventory_ready(
+        ApplicationSnapshot(
+            timestamp=1.0,
+            applications=[
+                AppInfo(package_name="com.example.app", category=AppCategory.USER)
+            ],
+        )
+    )
     assert window._recommendations
     applies = window.intelligence.findChildren(QPushButton, "recommendationApply")
     assert len(applies) >= 1
+
+
+def test_force_stop_needs_verified_inventory_link(qtapp) -> None:
+    window = MainWindow()
+    window.update_connection(ConnectionState.CONNECTED, "adb device A1")
+    window.on_serial_ready("FAKE123")
+    window.update_snapshots(
+        _cpu(90.0), _memory(40.0), _processes(cpu=90.0), _battery(80.0), _network()
+    )
+    # Without any verified inventory the heavy process is only proposed with
+    # name-validity evidence, never as a force-stop target.
+    assert all(
+        r.action != "force_stop" for r in window._recommendations
+    )
+    # The inventory (re)read verifies the process name as installed: the
+    # force-stop recommendation appears, linked to a real app.
+    from android_task_manager.applications.models import (
+        AppCategory,
+        AppInfo,
+        ApplicationSnapshot,
+    )
+
+    window.on_apps_inventory_ready(
+        ApplicationSnapshot(
+            timestamp=1.0,
+            applications=[
+                AppInfo(
+                    package_name="com.example.app",
+                    category=AppCategory.USER,
+                )
+            ],
+        )
+    )
+    assert any(
+        r.action == "force_stop" and r.target == "com.example.app"
+        for r in window._recommendations
+    )
+    applies = window.intelligence.findChildren(QPushButton, "recommendationApply")
+    assert len(applies) >= 1
+
+
+def _verify_inventory(window: MainWindow) -> None:
+    from android_task_manager.applications.models import (
+        AppCategory,
+        AppInfo,
+        ApplicationSnapshot,
+    )
+
+    window.on_apps_inventory_ready(
+        ApplicationSnapshot(
+            timestamp=1.0,
+            applications=[
+                AppInfo(package_name="com.example.app", category=AppCategory.USER)
+            ],
+        )
+    )
 
 
 def test_apply_click_emits_signal(qtapp, monkeypatch) -> None:
@@ -250,6 +320,7 @@ def test_apply_click_emits_signal(qtapp, monkeypatch) -> None:
     window.update_snapshots(
         _cpu(90.0), _memory(40.0), _processes(cpu=90.0), _battery(80.0), _network()
     )
+    _verify_inventory(window)
     monkeypatch.setattr(window, "_confirm_apps_action", lambda *args: True)
     recorded: list = []
     window.intelligence.apply_requested.connect(lambda rec: recorded.append(rec))
@@ -302,6 +373,7 @@ def test_destructive_apply_uses_user_path_with_confirmation(qtapp, monkeypatch) 
     window.update_snapshots(
         _cpu(90.0), _memory(40.0), _processes(cpu=90.0), _battery(80.0), _network()
     )
+    _verify_inventory(window)
     confirmed: list[bool] = [False]
     monkeypatch.setattr(window, "_confirm_apps_action", lambda *args: confirmed[0])
     emitted: list[tuple[str, str]] = []

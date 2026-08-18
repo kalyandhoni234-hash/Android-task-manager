@@ -184,6 +184,33 @@ def test_cpu_finding_skips_non_package_process_names() -> None:
     assert all(r.action != FORCE_STOP for r in recs)
 
 
+def test_force_stop_target_must_be_verified_installed_package() -> None:
+    health = _health_with(_finding(COMPONENT_CPU))
+    heavy = _user_process("com.example.app", CPU_HIGH_PERCENT)
+    processes = ProcessSnapshot(timestamp=100.0, processes=[heavy])
+    # Without the verified inventory (None) name validity is used honestly.
+    assert any(r.action == FORCE_STOP and r.target == "com.example.app"
+               for r in recommend(health, processes, installed_packages=None))
+    # With a verified inventory that does not contain the package: never
+    # proposed — a spoofed process name cannot become a force-stop target.
+    recs = recommend(health, processes, installed_packages={"com.other.app"})
+    assert all(r.action != FORCE_STOP for r in recs)
+    # Verified installed: proposed with the identity link satisfied.
+    recs = recommend(health, processes, installed_packages={"com.example.app"})
+    assert any(r.action == FORCE_STOP and r.target == "com.example.app"
+               for r in recs)
+
+
+def test_force_stop_verified_set_filters_per_process() -> None:
+    health = _health_with(_finding(COMPONENT_CPU))
+    a = _user_process("com.aaa.app", CPU_HIGH_PERCENT, pid=100)
+    b = _user_process("com.bbb.app", CPU_HIGH_PERCENT, pid=101)
+    processes = ProcessSnapshot(timestamp=100.0, processes=[a, b])
+    recs = recommend(health, processes, installed_packages={"com.bbb.app"})
+    targets = [r.target for r in recs if r.action == FORCE_STOP]
+    assert targets == ["com.bbb.app"]
+
+
 # ---------------------------------------------------------------------------
 # Process findings
 # ---------------------------------------------------------------------------

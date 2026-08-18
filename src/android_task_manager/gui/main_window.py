@@ -363,6 +363,10 @@ class MainWindow(QMainWindow):
         self._automation = AutomationEngine()
         self._pending_automation_task: AutomationTask | None = None
         self._latest_app_snapshot: ApplicationSnapshot | None = None
+        #: Verified installed-package set (process-to-app identity link for
+        #: recommendations). Starts empty, never guessed: force-stop targets
+        #: are only proposed for packages the device has verified installed.
+        self._verified_packages: set[str] = set()
 
         self.processes.inspection_requested.connect(self.inspect_requested.emit)
         self.processes.inspector.action_requested.connect(self._on_action_clicked)
@@ -707,7 +711,9 @@ class MainWindow(QMainWindow):
     def _evaluate_recommendations(self, now: float) -> None:
         """Derive recommendations from the health findings; record new ones
         on the timeline (each distinct recommendation set once)."""
-        recommendations = recommend(self._health, self._latest_processes)
+        recommendations = recommend(
+            self._health, self._latest_processes, installed_packages=self._verified_packages
+        )
         if recommendations != self._recommendations:
             self._recommendations = recommendations
             if recommendations:
@@ -845,6 +851,7 @@ class MainWindow(QMainWindow):
             self._latest_processes = None
             self._latest_network_investigation = None
             self._latest_app_snapshot = None
+            self._verified_packages = set()
             self._diagnostics_report = None
             self._health = None
             self._recommendations = ()
@@ -1055,6 +1062,8 @@ class MainWindow(QMainWindow):
     def on_packages_ready(self, packages: set[str]) -> None:
         """Forward the verified package list to the inspector panel."""
         self.processes.inspector.set_packages(packages)
+        self._verified_packages = set(packages)
+        self._evaluate_intelligence()
 
     # ------------------------------------------------------------------
     # Application inventory handlers (GUI thread; results from AppsWorker)
@@ -1069,6 +1078,9 @@ class MainWindow(QMainWindow):
     def on_apps_inventory_ready(self, snapshot: ApplicationSnapshot) -> None:
         """Adopt the fresh installed-application inventory."""
         self._latest_app_snapshot = snapshot
+        self._verified_packages = {
+            app.package_name for app in snapshot.applications
+        }
         self.apps.set_snapshot(snapshot)
         self._evaluate_intelligence()
         self._refresh_overview()
