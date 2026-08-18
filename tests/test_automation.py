@@ -270,9 +270,22 @@ def test_loop_protection_state_resets_on_new_session() -> None:
     engine.approve(task.task_id, now=15.0)
     assert engine.execute(task.task_id, now=20.0).status is AutomationStatus.SUCCEEDED
     engine.begin_session()
-    task = engine.submit(_recommendation(recommendation_id="REC-002"), now=30.0)
+    # Fresh session: stale tasks are gone (bounded memory), ids restart, and
+    # the execution budget resets so the same pair may run again.
+    assert engine.tasks == ()
+    task = engine.submit(_recommendation(), now=30.0)
+    assert task.task_id == "A-001"
     engine.approve(task.task_id, now=35.0)
     assert engine.execute(task.task_id, now=40.0).status is AutomationStatus.SUCCEEDED
+
+
+def test_task_list_cannot_grow_unbounded_across_sessions() -> None:
+    engine = AutomationEngine()
+    for _ in range(5):
+        engine.begin_session()
+        engine.submit(_recommendation(), now=10.0)
+    # Only the current session's tasks remain.
+    assert len(engine.tasks) == 1
 
 
 def test_invalid_engine_parameters_rejected() -> None:

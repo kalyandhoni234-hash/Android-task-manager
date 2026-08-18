@@ -76,7 +76,15 @@ class AutomationEngine:
     # ------------------------------------------------------------------
 
     def begin_session(self) -> None:
-        """Reset cooldowns and execution budgets for a new session."""
+        """Reset cooldowns, execution budgets and the task list.
+
+        A new device session starts from a clean slate: previous sessions'
+        tasks are gone (bounded memory — the task list cannot grow forever),
+        and every (action, target) pair may be acted on again under the
+        session budget.
+        """
+        self._tasks = {}
+        self._next_id = 1
         self._targets = {}
 
     def clear(self) -> None:

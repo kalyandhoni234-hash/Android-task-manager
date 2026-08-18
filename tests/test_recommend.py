@@ -211,6 +211,38 @@ def test_force_stop_verified_set_filters_per_process() -> None:
     assert targets == ["com.bbb.app"]
 
 
+def test_large_process_datasets_stay_usable() -> None:
+    """Phase L: a big process table must not blow up the recommendation
+    engine — one pass, deterministic, only genuinely flagged targets."""
+    health = _health_with(_finding(COMPONENT_CPU))
+    processes_list = []
+    for pid in range(1, 5001):
+        heavy = pid % 1000 == 0  # five heavy processes across the table
+        processes_list.append(
+            ProcessInfo(
+                pid=pid,
+                name=f"com.example.pkg{pid:04d}" if heavy else f"proc{pid}",
+                uid=10000 + pid,
+                state="R",
+                cpu_percent=CPU_HIGH_PERCENT if heavy else 0.5,
+                memory_percent=5.0,
+                category=(
+                    ProcessCategory.USER if heavy else ProcessCategory.SYSTEM
+                ),
+            )
+        )
+    processes = ProcessSnapshot(timestamp=100.0, processes=processes_list)
+    recs = recommend(health, processes, installed_packages={f"com.example.pkg{pid:04d}" for pid in range(1000, 5001, 1000)})
+    targets = [r.target for r in recs if r.action == FORCE_STOP]
+    assert targets == [
+        "com.example.pkg1000",
+        "com.example.pkg2000",
+        "com.example.pkg3000",
+        "com.example.pkg4000",
+        "com.example.pkg5000",
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Process findings
 # ---------------------------------------------------------------------------

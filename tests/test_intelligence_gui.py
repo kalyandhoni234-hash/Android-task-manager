@@ -727,3 +727,56 @@ def test_failed_action_records_failure_not_success(qtapp, monkeypatch) -> None:
         if e.event_type == "ACTION_EXECUTED" and "failed" in e.title
     ]
     assert len(failure_events) == 1
+
+
+# ---------------------------------------------------------------------------
+# Performance + loop protection (Phase L)
+# ---------------------------------------------------------------------------
+
+
+def test_sustained_load_keeps_timeline_and_history_bounded(qtapp) -> None:
+    window = MainWindow()
+    connect_window(window)
+    from android_task_manager.timeline import DEFAULT_MAX_EVENTS
+
+    for level in range(300):
+        window.update_snapshots(
+            _cpu(10.0 + level % 40), _memory(30.0 + level % 20),
+            _processes(), _battery(90.0 - level % 50), _network(),
+        )
+    assert len(window._timeline.events) <= DEFAULT_MAX_EVENTS
+    assert len(window._session_history.cpu) <= 180
+    assert len(window._session_history.battery) <= 96
+
+
+def test_rule_fires_display_is_replaced_not_appended(qtapp) -> None:
+    window = MainWindow()
+    connect_window(window)
+    window.update_snapshots(
+        _cpu(90.0), _memory(40.0), _processes(), _battery(80.0), _network()
+    )
+    assert window._rule_fires
+    # A later healthy snapshot clears the alerts rather than stacking them.
+    window.update_snapshots(
+        _cpu(12.5), _memory(40.0), _processes(), _battery(80.0), _network()
+    )
+    assert window._rule_fires == ()
+
+
+def test_automation_tasks_bounded_across_reconnects(qtapp, monkeypatch) -> None:
+    window = MainWindow()
+    connect_window(window)
+    _wire_automation(window, monkeypatch)
+    window._recommendations = (_automation_ready_recommendation(),)
+    for _ in range(3):
+        window._refresh_intelligence()
+        apply = window.intelligence.findChildren(QPushButton, "recommendationApply")[0]
+        apply.click()
+        window.on_action_result(
+            ActionResult(action="enable", package_name="com.example.app",
+                         success=True, message="ok")
+        )
+        window.update_connection(ConnectionState.DISCONNECTED, "adb device A1")
+        window.update_connection(ConnectionState.CONNECTED, "adb device A1")
+        window.on_serial_ready("FAKE123")
+    assert len(window._automation.tasks) <= 1
