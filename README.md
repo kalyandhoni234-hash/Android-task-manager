@@ -403,11 +403,14 @@ Phase 1 adds three automated checks (also enforced in CI):
 python -m ruff check src tests        # lint (E4/E7/E9, F, I, B)
 python -m mypy src/android_task_manager/core src/android_task_manager/adb \
   src/android_task_manager/device src/android_task_manager/diagnostics \
-  src/android_task_manager/action src/android_task_manager/applications  # type check (enforced scope)
+  src/android_task_manager/action src/android_task_manager/applications \
+  src/android_task_manager/history src/android_task_manager/health \
+  src/android_task_manager/timeline src/android_task_manager/rules \
+  src/android_task_manager/recommend src/android_task_manager/automation  # type check (enforced scope)
 python -m pip_audit                   # dependency vulnerability audit
 ```
 
-The mypy scope is the pure core + ADB layer, the device-information and diagnostics packages, and the v0.7 safe-action + applications-inventory packages; the rest of the GUI layer carries pre-existing PySide6 typing debt that is tracked for later phases. `pip-audit` needs the installed environment (`pip install -e ".[dev]"`).
+The mypy scope is the pure core + ADB layer, the device-information and diagnostics packages, the v0.7 safe-action + applications-inventory packages, and the v0.8 device-intelligence packages (history, health, timeline, rules, recommend, automation); the rest of the GUI layer carries pre-existing PySide6 typing debt that is tracked for later phases. `pip-audit` needs the installed environment (`pip install -e ".[dev]"`).
 
 ## CI/CD
 
@@ -417,7 +420,7 @@ Three workflows in `.github/workflows/`:
 
 | Workflow | Trigger | What it does |
 | --- | --- | --- |
-| `ci.yml` | push / PR | Full test suite on **Python 3.10 / 3.11 / 3.12** (headless Qt), `python -m build` package check, **lint** (`ruff`), **typecheck** (`mypy` on `core` + `adb` + `device` + `diagnostics`), **dependency audit** (`pip-audit`), plus a website job (Next.js lint + static export under Node 22). |
+| `ci.yml` | push / PR | Full test suite on **Python 3.10 / 3.11 / 3.12** (headless Qt), `python -m build` package check, **lint** (`ruff`), **typecheck** (`mypy` on `core` + `adb` + `device` + `diagnostics` + `action` + `applications` + the v0.8 intelligence core), **dependency audit** (`pip-audit`), plus a website job (Next.js lint + static export under Node 22). |
 | `release.yml` | tag `v*` | On **Windows**, runs `packaging/build_windows.ps1`, generates `SHA256SUMS.txt`, and publishes `AndroidTaskManager.exe`, `AndroidTaskManager-debug.exe` and the checksums to a GitHub Release (`softprops/action-gh-release`). |
 | `deploy-pages.yml` | push to `master` (website paths) / manual | Builds the Next.js static export and deploys it to GitHub Pages. Note: repo settings must use **Source: GitHub Actions**. |
 

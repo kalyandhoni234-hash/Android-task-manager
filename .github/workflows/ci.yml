@@ -86,7 +86,7 @@ jobs:
       # intelligence and device-management work. The GUI layer's
       # pre-existing PySide6 typing debt is tracked separately (see
       # pyproject.toml).
-      - name: Mypy (core + adb + device + diagnostics + action + applications)
+      - name: Mypy (core + adb + device + diagnostics + action + applications + v0.8 intelligence core)
         run: |
           python -m mypy \
             src/android_task_manager/core \
@@ -94,7 +94,13 @@ jobs:
             src/android_task_manager/device \
             src/android_task_manager/diagnostics \
             src/android_task_manager/action \
-            src/android_task_manager/applications
+            src/android_task_manager/applications \
+            src/android_task_manager/history \
+            src/android_task_manager/health \
+            src/android_task_manager/timeline \
+            src/android_task_manager/rules \
+            src/android_task_manager/recommend \
+            src/android_task_manager/automation
 
   audit:
     name: Dependency audit (pip-audit)
