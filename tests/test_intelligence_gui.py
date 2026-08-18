@@ -780,3 +780,81 @@ def test_automation_tasks_bounded_across_reconnects(qtapp, monkeypatch) -> None:
         window.update_connection(ConnectionState.CONNECTED, "adb device A1")
         window.on_serial_ready("FAKE123")
     assert len(window._automation.tasks) <= 1
+
+
+# ---------------------------------------------------------------------------
+# Security / package-name hardening (Phase M)
+# ---------------------------------------------------------------------------
+
+
+def test_system_app_process_never_gets_force_stop(qtapp) -> None:
+    window = MainWindow()
+    connect_window(window)
+    window.update_snapshots(
+        _cpu(90.0), _memory(40.0), _processes(cpu=90.0), _battery(80.0), _network()
+    )
+    from android_task_manager.applications.models import (
+        AppCategory,
+        AppInfo,
+        ApplicationSnapshot,
+    )
+
+    window.on_apps_inventory_ready(
+        ApplicationSnapshot(
+            timestamp=1.0,
+            applications=[
+                # Installed and verified — but a SYSTEM package, so the
+                # destructive control must stay away (v0.7 capability rule).
+                AppInfo(package_name="com.example.app", category=AppCategory.SYSTEM)
+            ],
+        )
+    )
+    assert all(r.action != "force_stop" for r in window._recommendations)
+    assert window.intelligence.findChildren(QPushButton, "recommendationApply") == []
+
+
+def test_automation_refuses_invalid_target_without_emitting(qtapp, monkeypatch) -> None:
+    window = MainWindow()
+    connect_window(window)
+    emitted = _wire_automation(window, monkeypatch)
+    from android_task_manager.recommend import Recommendation
+
+    malicious = Recommendation(
+        recommendation_id="REC-001",
+        finding_ref="finding",
+        title="Evil",
+        rationale="reason",
+        severity="warning",
+        action="enable",
+        target="com.example.app; rm -rf /",
+        destructive=False,
+        automation_allowed=True,
+    )
+    window._recommendations = (malicious,)
+    window._refresh_intelligence()
+    apply = window.intelligence.findChildren(QPushButton, "recommendationApply")[0]
+    apply.click()
+    assert emitted == []  # fails closed at submit: nothing dispatched
+    assert window._pending_automation_task is None
+    assert window._automation.tasks[-1].status.value == "failed"
+
+
+def test_timeline_renders_device_text_as_plain_text(qtapp) -> None:
+    """Device-raw strings (serials, process names) must never be parsed as
+    HTML — the timeline label stays plain text."""
+
+    window = MainWindow()
+    connect_window(window)
+    window._timeline.record(
+        "DEVICE_CONNECTED",
+        "<b>sneaky</b> & <script>alert(1)</script>",
+        "detail",
+        monotonic=1.0,
+        wall_clock=None,
+        device_serial="FAKE123",
+        severity="info",
+        entity=None,
+    )
+    window._refresh_intelligence()
+    label = window.intelligence._timeline_label
+    assert "<b>sneaky</b> & <script>alert(1)</script>" in label.text()

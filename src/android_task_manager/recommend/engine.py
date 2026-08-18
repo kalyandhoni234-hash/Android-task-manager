@@ -139,6 +139,7 @@ def _flagged_user_processes(
     cpu_threshold: float,
     memory_threshold: float | None,
     installed: set[str] | None = None,
+    targetable: set[str] | None = None,
 ) -> tuple[tuple[str, str], ...]:
     """(package, evidence) of user processes at/above the thresholds.
 
@@ -151,6 +152,13 @@ def _flagged_user_processes(
     process name never becomes a force-stop target. When the inventory is
     unknown (``None``), name validity alone is used and the caller knows
     the identity was not verified.
+
+    System-app protection (Phase M): when *targetable* is given (the
+    user-category packages from the inventory), a proposed force-stop
+    target must also be in that set — destructive controls never reach
+    system/protected applications, mirroring the v0.7 UI's capability
+    rules. ``None`` means no category restriction is known; the caller
+    decides how to treat that state.
     """
     if processes is None:
         return ()
@@ -162,6 +170,8 @@ def _flagged_user_processes(
         if not is_valid_package_name(name):
             continue
         if installed is not None and name not in installed:
+            continue
+        if targetable is not None and name not in targetable:
             continue
         if process.cpu_percent is not None and process.cpu_percent >= cpu_threshold:
             hits.append(
@@ -193,6 +203,7 @@ def recommend(
     health: DeviceHealth,
     processes: ProcessSnapshot | None = None,
     installed_packages: set[str] | None = None,
+    user_packages: set[str] | None = None,
 ) -> tuple[Recommendation, ...]:
     """Derive deterministic recommendations from *health*.
 
@@ -205,6 +216,12 @@ def recommend(
     heavy-user-process targets are only proposed when verified installed.
     ``None`` means the inventory is unknown — name validity alone is used,
     and the caller knows identity was not verified.
+
+    *user_packages* carries the user-category packages (Phase M system-app
+    protection): when given, force-stop targets must be in it, so
+    destructive controls never reach system/protected applications. The
+    GUI always provides it from the inventory's authoritative category
+    classification.
     """
     recommendations: list[Recommendation] = []
     seen_targets: set[str] = set()
@@ -231,6 +248,7 @@ def recommend(
                 cpu_threshold=CPU_HIGH_PERCENT,
                 memory_threshold=None,
                 installed=installed_packages,
+                targetable=user_packages,
             ):
                 if package in seen_targets:
                     continue
@@ -246,6 +264,7 @@ def recommend(
                 cpu_threshold=CPU_HIGH_PERCENT,
                 memory_threshold=MEMORY_USED_HIGH_PERCENT,
                 installed=installed_packages,
+                targetable=user_packages,
             ):
                 if package in seen_targets:
                     continue

@@ -367,6 +367,10 @@ class MainWindow(QMainWindow):
         #: recommendations). Starts empty, never guessed: force-stop targets
         #: are only proposed for packages the device has verified installed.
         self._verified_packages: set[str] = set()
+        #: User-category packages (Phase M system-app protection): the only
+        #: set force-stop recommendations may target. Derived from the
+        #: inventory's authoritative category classification; starts empty.
+        self._user_packages: set[str] = set()
 
         self.processes.inspection_requested.connect(self.inspect_requested.emit)
         self.processes.inspector.action_requested.connect(self._on_action_clicked)
@@ -713,7 +717,10 @@ class MainWindow(QMainWindow):
         """Derive recommendations from the health findings; record new ones
         on the timeline (each distinct recommendation set once)."""
         recommendations = recommend(
-            self._health, self._latest_processes, installed_packages=self._verified_packages
+            self._health,
+            self._latest_processes,
+            installed_packages=self._verified_packages,
+            user_packages=self._user_packages,
         )
         if recommendations != self._recommendations:
             self._recommendations = recommendations
@@ -853,6 +860,7 @@ class MainWindow(QMainWindow):
             self._latest_network_investigation = None
             self._latest_app_snapshot = None
             self._verified_packages = set()
+            self._user_packages = set()
             self._diagnostics_report = None
             self._health = None
             self._recommendations = ()
@@ -1095,6 +1103,11 @@ class MainWindow(QMainWindow):
         self._latest_app_snapshot = snapshot
         self._verified_packages = {
             app.package_name for app in snapshot.applications
+        }
+        self._user_packages = {
+            app.package_name
+            for app in snapshot.applications
+            if app.category is AppCategory.USER
         }
         self.apps.set_snapshot(snapshot)
         self._evaluate_intelligence()

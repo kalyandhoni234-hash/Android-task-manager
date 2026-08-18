@@ -244,6 +244,44 @@ def test_large_process_datasets_stay_usable() -> None:
 
 
 # ---------------------------------------------------------------------------
+# System-app protection (Phase M)
+# ---------------------------------------------------------------------------
+
+
+def test_system_apps_never_receive_destructive_recommendations() -> None:
+    health = _health_with(_finding(COMPONENT_CPU))
+    heavy = _user_process("com.example.app", CPU_HIGH_PERCENT)
+    processes = ProcessSnapshot(timestamp=100.0, processes=[heavy])
+    installed = {"com.example.app"}
+    # The package is installed but classified SYSTEM (protected): the
+    # targetable set excludes it, so no force-stop is ever proposed.
+    recs = recommend(
+        health,
+        processes,
+        installed_packages=installed,
+        user_packages={"com.other.app"},
+    )
+    assert all(r.action != FORCE_STOP for r in recs)
+    # Classified USER: the destructive recommendation is allowed.
+    recs = recommend(
+        health,
+        processes,
+        installed_packages=installed,
+        user_packages=installed,
+    )
+    assert any(r.action == FORCE_STOP and r.target == "com.example.app" for r in recs)
+    # Unknown category classification (None): the caller decides; the GUI
+    # always supplies the authoritative set, so this only happens headless.
+    recs = recommend(
+        health,
+        processes,
+        installed_packages=installed,
+        user_packages=None,
+    )
+    assert any(r.action == FORCE_STOP for r in recs)
+
+
+# ---------------------------------------------------------------------------
 # Process findings
 # ---------------------------------------------------------------------------
 
