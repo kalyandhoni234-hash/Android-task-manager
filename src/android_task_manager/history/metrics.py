@@ -21,7 +21,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
-from typing import Deque, Iterator
+from typing import Callable, Deque, Iterator
 
 #: Minimum samples before a trend direction can be claimed.
 MIN_TREND_SAMPLES = 4
@@ -135,6 +135,10 @@ class MetricHistory:
         """Most recently recorded value (or None when empty)."""
         return self._samples[-1].value if self._samples else None
 
+    def last_timestamp(self) -> float | None:
+        """Timestamp of the most recently recorded sample (or None)."""
+        return self._samples[-1].timestamp if self._samples else None
+
     def stats(self) -> MetricStats:
         """Deterministic statistics over the current window."""
         if not self._samples:
@@ -207,12 +211,25 @@ class MetricHistory:
         started is returned. A run is only trusted while it stays above the
         threshold — a single dip breaks it.
         """
+        return self.sustained_while(lambda value: value >= threshold, duration)
+
+    def sustained_while(
+        self, predicate: Callable[[float], bool], duration: float
+    ) -> float | None:
+        """The earliest timestamp from which *predicate(value)* has held
+        continuously for at least *duration*, or None.
+
+        The direction-agnostic variant of :meth:`sustained_since`: the
+        engine can express "at or below", "strictly above", etc. without
+        duplicating the walk. The predicate must be total (return False
+        for unavailable data).
+        """
         if len(self._samples) < 2:
             return None
         run_end = self._samples[-1].timestamp
         run_start = run_end
         for sample in reversed(tuple(self._samples)):
-            if sample.value < threshold:
+            if not predicate(sample.value):
                 return None
             run_start = sample.timestamp
             if run_end - run_start >= duration:
