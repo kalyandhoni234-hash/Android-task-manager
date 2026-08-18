@@ -854,3 +854,42 @@ def test_main_window_with_wire_closes_cleanly(qtapp) -> None:
     window.closed.emit()
     assert worker._stopped
     assert not actions.is_busy()
+
+
+# ---------------------------------------------------------------------------
+# Manage button: navigation into the Applications manager
+# ---------------------------------------------------------------------------
+
+
+def test_manage_button_available_for_verified_package(qtapp) -> None:
+    window = MainWindow()
+    _show_dashboard(window)
+    window.processes.inspector.set_packages(PACKAGES)
+    window.processes.inspector.set_snapshot(app_snapshot())
+    QApplication.processEvents()
+    inspector = window.processes.inspector
+    assert inspector._manage_btn.isVisible()
+    assert inspector._manage_btn.isEnabled()
+
+
+def test_manage_button_disabled_for_unverified(qtapp) -> None:
+    window = MainWindow()
+    _show_dashboard(window)
+    window.processes.inspector.set_packages(PACKAGES)
+    window.processes.inspector.set_snapshot(system_snapshot())
+    QApplication.processEvents()
+    inspector = window.processes.inspector
+    assert inspector._manage_btn.isVisible()
+    assert not inspector._manage_btn.isEnabled()
+
+
+def test_manage_button_emits_resolved_package(qtapp) -> None:
+    window = MainWindow()
+    _show_dashboard(window)
+    window.processes.inspector.set_packages(PACKAGES)
+    window.processes.inspector.set_snapshot(app_snapshot())
+    QApplication.processEvents()
+    managed: list[str] = []
+    window.processes.inspector.manage_requested.connect(lambda p: managed.append(p))
+    window.processes.inspector._manage_btn.click()
+    assert managed == ["com.heavy.app"]
