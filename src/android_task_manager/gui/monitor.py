@@ -36,6 +36,7 @@ from ..memory.collector import MemoryCollector
 from ..network.collector import NetworkCollector
 from ..network_investigation.collector import NetworkInvestigationCollector
 from ..process.collector import ProcessCollector
+from ..storage.collector import StorageCollector
 
 logger = logging.getLogger("android_task_manager.monitor")
 
@@ -90,6 +91,10 @@ class MonitorWorker(QObject):
     #: (NetworkInvestigationSnapshot) — the socket-level view from the
     #: investigation collector; published on its own slower cadence.
     network_investigation = Signal(object)
+    #: (StorageSnapshot | None) — the live internal-storage snapshot from
+    #: the storage collector; published on its own slow cadence (``df -k``
+    #: is cheap but the value changes slowly). None means "unavailable".
+    storage_snapshot = Signal(object)
     #: (device_label, android_version)
     device_info = Signal(str, str)
     #: (DeviceInformation) — the structured identity snapshot, emitted once
@@ -121,6 +126,7 @@ class MonitorWorker(QObject):
         battery_interval: float = 15.0,
         network_interval: float = 5.0,
         network_investigation_interval: float = 10.0,
+        storage_interval: float = 30.0,
     ) -> None:
         super().__init__()
         self._timeout = timeout
@@ -136,6 +142,7 @@ class MonitorWorker(QObject):
         self._network_collector = NetworkCollector(self._connection)
         self._network_investigation_collector = NetworkInvestigationCollector(self._connection)
         self._device_info_collector = DeviceInfoCollector(self._connection)
+        self._storage_collector = StorageCollector(self._connection)
 
         self._cpu_interval = cpu_interval
         self._memory_interval = memory_interval
@@ -143,6 +150,7 @@ class MonitorWorker(QObject):
         self._battery_interval = battery_interval
         self._network_interval = network_interval
         self._network_investigation_interval = network_investigation_interval
+        self._storage_interval = storage_interval
 
         self._stopped = False
         self._connected = False
@@ -153,11 +161,13 @@ class MonitorWorker(QObject):
         self._battery: object | None = None
         self._network: object | None = None
         self._network_investigation: object | None = None
+        self._storage: object | None = None
         self._last_memory_at = 0.0
         self._last_process_at = 0.0
         self._last_battery_at = 0.0
         self._last_network_at = 0.0
         self._last_network_investigation_at = 0.0
+        self._last_storage_at = 0.0
 
     # ------------------------------------------------------------------
     # Lifecycle / loop
@@ -267,11 +277,13 @@ class MonitorWorker(QObject):
         self._battery = None
         self._network = None
         self._network_investigation = None
+        self._storage = None
         self._last_memory_at = 0.0
         self._last_process_at = 0.0
         self._last_battery_at = 0.0
         self._last_network_at = 0.0
         self._last_network_investigation_at = 0.0
+        self._last_storage_at = 0.0
 
     def _report_devices(self) -> None:
         """Enumerate attached devices (best-effort) for the selection UI."""
@@ -400,6 +412,9 @@ class MonitorWorker(QObject):
                 "_network_investigation",
             )
             self._last_network_investigation_at = time.monotonic()
+        if self._storage is None or (now - self._last_storage_at) >= self._storage_interval:
+            collect("storage", self._storage_collector.sample, "_storage")
+            self._last_storage_at = time.monotonic()
 
         if errors:
             self.connection_changed.emit(state, "; ".join(errors))
@@ -421,3 +436,5 @@ class MonitorWorker(QObject):
         self.snapshots.emit(self._cpu, self._memory, self._processes, self._battery, self._network)
         if self._network_investigation is not None:
             self.network_investigation.emit(self._network_investigation)
+        if self._storage is not None:
+            self.storage_snapshot.emit(self._storage)

@@ -51,11 +51,13 @@ jobs:
       - name: Ruff check (src + tests)
         run: python -m ruff check src tests
 
-      - name: Mypy (core + adb)
+      - name: Mypy (core + adb + action + applications)
         run: |
           python -m mypy \
             src/android_task_manager/core \
-            src/android_task_manager/adb
+            src/android_task_manager/adb \
+            src/android_task_manager/action \
+            src/android_task_manager/applications
 
       - name: Dependency audit (pip-audit)
         run: python -m pip_audit

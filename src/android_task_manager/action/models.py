@@ -13,11 +13,15 @@ from enum import Enum
 
 
 #: Human-meaningful, machine-checkable failure categories. These map 1:1 to
-#: the existing typed ADB exception hierarchy plus validation failures.
+#: the existing typed ADB exception hierarchy plus validation failures and
+#: capability checks.
 class ActionErrorKind(Enum):
     INVALID_PACKAGE = "invalid_package"
+    INVALID_TARGET = "invalid_target"
     NOT_FOUND = "not_found"
     NOT_LAUNCHABLE = "not_launchable"
+    NOT_SUPPORTED = "not_supported"
+    PERMISSION_DENIED = "permission_denied"
     DISCONNECTED = "disconnected"
     UNAUTHORIZED = "unauthorized"
     NO_DEVICE = "no_device"
@@ -29,13 +33,20 @@ class ActionErrorKind(Enum):
 
 @dataclass(frozen=True)
 class ActionResult:
-    """Typed outcome of one device action."""
+    """Typed outcome of one device action.
+
+    ``target`` names the validated object the action ran against (the
+    package name, or the PID for process-level actions); ``details`` may
+    carry structured, safe extra context (never raw device output).
+    """
 
     action: str
     package_name: str
     success: bool
     message: str = ""
     error_kind: ActionErrorKind | None = None
+    target: str = ""
+    details: str = ""
 
 
 class ActionError(Exception):

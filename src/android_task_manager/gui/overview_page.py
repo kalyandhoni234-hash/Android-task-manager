@@ -1,22 +1,58 @@
-"""Overview page: a concise summary of existing application state.
+"""Overview page: the live dashboard and a concise summary of app state.
 
 Pure presentation over data the monitoring session already collected —
-no analysis is performed here. Every metric is displayed only when the
-value exists; otherwise the card shows an honest "—". No security scores,
-no risk percentages, no threat levels are ever computed: the Security
-Status section re-states the existing severity counts in the severity
-model's own vocabulary (HIGH / MEDIUM / INFO).
+no analysis is performed here, and no ADB command ever runs from this
+page. The top section is the LIVE DASHBOARD: CPU / RAM / Battery /
+Storage cards with current value, bounded trend graph and warning/critical
+coloring (canonical ``thresholds`` classifiers). Below it the existing
+summary sections (processes/network/drift/findings counts, diagnostics,
+security status, recent activity) complete the picture.
+
+Every metric is displayed only when the value exists; otherwise the card
+shows an honest "—". Trends are bounded sliding windows owned by the page
+itself (no timers, no workers): they reset when the device disconnects,
+so a previous device's history is never presented as current.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
+from ..thresholds import (
+    MetricLevel,
+    classify_battery_level,
+    classify_cpu,
+    classify_storage,
+    classify_used_memory,
+)
 from .monitor import ConnectionState
 from .styles import repolish
+from .thresholds import apply_metric_level
+from .widgets.history_base import HistoryPlotWidget
+
+#: Shared trend color for the live-metric plots (matches the CPU widget).
+_LIVE_COLOR = "#3d9be9"
+
+#: Value formatting per live metric (presentation only — never fabricates).
+_LIVE_FORMATS: dict[str, Callable[[float], str]] = {
+    "cpu": lambda value: f"{value:.1f}%",
+    "ram": lambda value: f"{value:.0f}% used",
+    "battery": lambda value: f"{value:.0f}%",
+    "storage": lambda value: f"{value:.0f}%",
+}
+
+#: Warning/critical classification per live metric (canonical thresholds).
+_LIVE_CLASSIFIERS = {
+    "cpu": classify_cpu,
+    "ram": classify_used_memory,
+    "battery": classify_battery_level,
+    "storage": classify_storage,
+}
 
 
 @dataclass(frozen=True)
@@ -39,6 +75,12 @@ class OverviewState:
     diagnostics_critical: int | None = None
     diagnostics_warning: int | None = None
     diagnostics_info: int | None = None
+
+    #: Live dashboard metrics (current values; None = unavailable).
+    cpu_percent: float | None = None
+    memory_used_percent: float | None = None
+    battery_level_percent: float | None = None
+    storage_used_percent: float | None = None
 
 
 class OverviewPage(QWidget):
@@ -82,6 +124,35 @@ class OverviewPage(QWidget):
         device_row.addLayout(device_col, 1)
         device_row.addWidget(self._device_status)
         layout.addLayout(device_row)
+
+        # -- Live dashboard ------------------------------------------------
+        live_title = QLabel("LIVE METRICS")
+        live_title.setObjectName("sectionTitle")
+        live_title.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(live_title)
+
+        live_grid = QGridLayout()
+        live_grid.setSpacing(12)
+        #: (value label, history plot) per metric key.
+        self._live: dict[str, tuple[QLabel, HistoryPlotWidget]] = {}
+        #: Last rendered value per metric key, so a trend sample is only
+        #: appended when the value actually changed (a refresh must never
+        #: duplicate a sample for an unchanged metric).
+        self._live_last: dict[str, float | None] = {}
+        for column, (key, caption) in enumerate(
+            (
+                ("cpu", "CPU"),
+                ("ram", "RAM"),
+                ("battery", "BATTERY"),
+                ("storage", "STORAGE"),
+            )
+        ):
+            card, value, plot = self._make_live_card(caption)
+            self._live[key] = (value, plot)
+            self._live_last[key] = None
+            live_grid.addWidget(card, 0, column)
+            live_grid.setColumnStretch(column, 1)
+        layout.addLayout(live_grid)
 
         # -- Metric cards ----------------------------------------------------
         self._cards: dict[str, QLabel] = {}
@@ -184,6 +255,7 @@ class OverviewPage(QWidget):
     def refresh(self, state: OverviewState) -> None:
         """Re-render the whole page from one immutable summary state."""
         self._render_device(state)
+        self._render_live(state)
         self._render_cards(state)
         self._render_diagnostics(state)
         self._render_security(state)
@@ -207,6 +279,35 @@ class OverviewPage(QWidget):
             self._device_status.setText("\u25cb No device connected")
             self._device_status.setObjectName("statusError")
             repolish(self._device_status)
+
+    def _render_live(self, state: OverviewState) -> None:
+        """Render the live dashboard cards: value, level, trend.
+
+        A disconnected device (or a missing metric) renders as "—" with a
+        cleared trend: history belongs to a device session and is never
+        carried across devices.
+        """
+        values = {
+            "cpu": state.cpu_percent,
+            "ram": state.memory_used_percent,
+            "battery": state.battery_level_percent,
+            "storage": state.storage_used_percent,
+        }
+        connected = state.connection is ConnectionState.CONNECTED
+        for key, (value_label, plot) in self._live.items():
+            value = values[key]
+            last = self._live_last[key]
+            if not connected or value is None:
+                value_label.setText("—")
+                apply_metric_level(value_label, MetricLevel.NORMAL)
+                plot.clear()
+                self._live_last[key] = None
+                continue
+            value_label.setText(_LIVE_FORMATS[key](value))
+            apply_metric_level(value_label, _LIVE_CLASSIFIERS[key](value))
+            if value != last:
+                plot.add_sample(0, value)
+                self._live_last[key] = value
 
     def _render_cards(self, state: OverviewState) -> None:
         values = {
@@ -322,6 +423,29 @@ class OverviewPage(QWidget):
             ConnectionState.COLLECTOR_ERROR: ("\u26a0 Data error", "statusWarn"),
         }
         return mapping.get(state, ("\u25cb No device connected", "statusError"))
+
+    def _make_live_card(
+        self, caption: str
+    ) -> tuple[QWidget, QLabel, HistoryPlotWidget]:
+        """One live-metric card: caption, big value, bounded trend plot."""
+        card = QWidget()
+        card.setObjectName("metricCard")
+        inner = QVBoxLayout(card)
+        inner.setContentsMargins(14, 12, 14, 12)
+        inner.setSpacing(6)
+        cap = QLabel(caption)
+        cap.setObjectName("cardCaption")
+        cap.setTextFormat(Qt.TextFormat.PlainText)
+        inner.addWidget(cap)
+        value = QLabel("—")
+        value.setObjectName("cardValue")
+        value.setProperty("mono", True)
+        value.setTextFormat(Qt.TextFormat.PlainText)
+        inner.addWidget(value)
+        plot = HistoryPlotWidget("", [QColor(_LIVE_COLOR)], max_samples=30, minimum_height=56)
+        plot.setObjectName("liveMetricPlot")
+        inner.addWidget(plot, 1)
+        return card, value, plot
 
     def _make_card(self, caption: str) -> tuple[QWidget, QLabel]:
         card = QWidget()

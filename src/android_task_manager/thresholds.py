@@ -43,6 +43,20 @@ TEMPERATURE_ELEVATED_C = 40.0
 #: Battery temperature at/above this °C is High (red).
 TEMPERATURE_HIGH_C = 45.0
 
+#: Used share of the internal storage volume above this percent is
+#: Elevated (amber) — operationally significant pressure starts around here.
+STORAGE_USED_ELEVATED_PERCENT = 80.0
+#: Used share of the internal storage volume at/above this percent is High
+#: (red) — the widely recognized "storage running out" region.
+STORAGE_USED_HIGH_PERCENT = 90.0
+
+#: Battery level below this percent is Elevated (amber) — the low-battery
+#: region where the user should consider charging.
+BATTERY_LEVEL_ELEVATED_PERCENT = 35.0
+#: Battery level at/below this percent is High (red) — the critically-low
+#: region where the device may shut down soon.
+BATTERY_LEVEL_HIGH_PERCENT = 20.0
+
 
 def classify_cpu(utilization_percent: float | None) -> MetricLevel:
     """Classify aggregate/core CPU utilization."""
@@ -77,15 +91,48 @@ def classify_temperature(celsius: float | None) -> MetricLevel:
     return MetricLevel.NORMAL
 
 
+def classify_storage(used_percent: float | None) -> MetricLevel:
+    """Classify the used share of the internal storage volume."""
+    if used_percent is None:
+        return MetricLevel.NORMAL
+    if used_percent >= STORAGE_USED_HIGH_PERCENT:
+        return MetricLevel.HIGH
+    if used_percent > STORAGE_USED_ELEVATED_PERCENT:
+        return MetricLevel.ELEVATED
+    return MetricLevel.NORMAL
+
+
+def classify_battery_level(level_percent: float | None) -> MetricLevel:
+    """Classify the battery level; low levels are the risky direction.
+
+    Unlike CPU/memory/storage (where *high* usage is the risk), a *low*
+    battery level is the risk: below the elevated threshold is Elevated,
+    at/below the high threshold is High.
+    """
+    if level_percent is None:
+        return MetricLevel.NORMAL
+    if level_percent <= BATTERY_LEVEL_HIGH_PERCENT:
+        return MetricLevel.HIGH
+    if level_percent < BATTERY_LEVEL_ELEVATED_PERCENT:
+        return MetricLevel.ELEVATED
+    return MetricLevel.NORMAL
+
+
 __all__ = [
+    "BATTERY_LEVEL_ELEVATED_PERCENT",
+    "BATTERY_LEVEL_HIGH_PERCENT",
     "CPU_ELEVATED_PERCENT",
     "CPU_HIGH_PERCENT",
     "MEMORY_USED_ELEVATED_PERCENT",
     "MEMORY_USED_HIGH_PERCENT",
+    "STORAGE_USED_ELEVATED_PERCENT",
+    "STORAGE_USED_HIGH_PERCENT",
     "TEMPERATURE_ELEVATED_C",
     "TEMPERATURE_HIGH_C",
     "MetricLevel",
+    "classify_battery_level",
     "classify_cpu",
+    "classify_storage",
     "classify_temperature",
     "classify_used_memory",
 ]

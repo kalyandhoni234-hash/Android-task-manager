@@ -127,6 +127,16 @@ class HistoryPlotWidget(QWidget):
             del target[:overflow]
         self.update()
 
+    def clear(self) -> None:
+        """Drop every retained sample (e.g. when the device disconnects).
+
+        History belongs to a device session: stale trends from a previous
+        device must never be presented as current.
+        """
+        for values in self._series:
+            values.clear()
+        self.update()
+
     # ------------------------------------------------------------------
     # Painting
     # ------------------------------------------------------------------

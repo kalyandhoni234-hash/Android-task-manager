@@ -30,6 +30,7 @@ _DEFAULT_PROCESS_INTERVAL = 5.0
 _DEFAULT_BATTERY_INTERVAL = 15.0
 _DEFAULT_NETWORK_INTERVAL = 5.0
 _DEFAULT_NETWORK_INVESTIGATION_INTERVAL = 10.0
+_DEFAULT_STORAGE_INTERVAL = 30.0
 
 #: How long shutdown waits per worker thread. Bounded by the worst-case
 #: in-flight work: a single ADB subprocess (``--timeout``, default 10 s)
@@ -100,6 +101,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Seconds between socket-table reads (default: %(default)s).",
     )
     parser.add_argument(
+        "--storage-interval",
+        type=float,
+        default=_DEFAULT_STORAGE_INTERVAL,
+        help="Seconds between internal-storage reads (default: %(default)s).",
+    )
+    parser.add_argument(
         "--timeout", type=float, default=10.0, help="Per-command timeout (default: %(default)s)."
     )
     return parser
@@ -115,6 +122,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         from PySide6.QtWidgets import QApplication
 
         from .action_worker import ActionWorker
+        from .apps_worker import AppsWorker
         from .baseline_worker import BaselineWorker
         from .device_report_worker import DeviceReportWorker
         from .incident_worker import IncidentWorker
@@ -123,6 +131,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             MainWindow,
             wire,
             wire_actions,
+            wire_apps,
             wire_device_report,
             wire_incident,
             wire_inspector,
@@ -174,9 +183,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         battery_interval=args.battery_interval,
         network_interval=args.network_interval,
         network_investigation_interval=args.network_investigation_interval,
+        storage_interval=args.storage_interval,
     )
     inspector = ProcessInspectionWorker(connection=connection, timeout=args.timeout)
     actions = ActionWorker(connection=connection, timeout=args.timeout)
+    apps = AppsWorker(connection=connection, timeout=args.timeout)
     baseline_worker = BaselineWorker(connection=connection, timeout=args.timeout)
     permission_worker = PermissionWorker(connection=connection, timeout=args.timeout)
     incident_worker = IncidentWorker()
@@ -185,6 +196,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     wire(window, worker)
     wire_inspector(window, inspector)
     wire_actions(window, worker, actions)
+    wire_apps(window, worker, apps, actions)
     wire_security(window, baseline_worker)
     wire_permissions(window, permission_worker)
     wire_incident(window, incident_worker)
@@ -235,6 +247,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     actions_thread = QThread()
     actions.moveToThread(actions_thread)
 
+    apps_thread = QThread()
+    apps.moveToThread(apps_thread)
+
     baseline_thread = QThread()
     baseline_worker.moveToThread(baseline_thread)
 
@@ -254,6 +269,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         thread,
         inspector_thread,
         actions_thread,
+        apps_thread,
         baseline_thread,
         permission_thread,
         incident_thread,
@@ -288,6 +304,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     thread.start()
     inspector_thread.start()
     actions_thread.start()
+    apps_thread.start()
     baseline_thread.start()
     permission_thread.start()
     incident_thread.start()

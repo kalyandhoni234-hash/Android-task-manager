@@ -346,15 +346,15 @@ def test_overview_link_navigates_to_diagnostics_page(qtapp) -> None:
         lambda: window._on_page_requested("diagnostics")
     )
     window.overview._diagnostics_link.click()
-    assert window._pages.currentIndex() == 7
+    assert window._pages.currentIndex() == 8
     assert window.sidebar.active_page() == "diagnostics"
 
 
 def test_sidebar_has_diagnostics_page(qtapp) -> None:
     window = MainWindow()
-    assert window._pages.widget(7).widget() is window.diagnostics_page
+    assert window._pages.widget(8).widget() is window.diagnostics_page
     window.sidebar.button("diagnostics").click()
-    assert window._pages.currentIndex() == 7
+    assert window._pages.currentIndex() == 8
 
 
 # ---------------------------------------------------------------------------
@@ -472,4 +472,4 @@ def test_existing_findings_page_untouched_by_diagnostics(qtapp) -> None:
     window.update_snapshots(cpu, memory, processes, battery(48.0), network)
     assert window.findings._empty is not None
     assert "No suspicious signals" in window.findings._empty.text()
-    assert window._pages.widget(4).widget() is window.findings
+    assert window._pages.widget(5).widget() is window.findings

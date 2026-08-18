@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     ("OVERVIEW", (("overview", "Overview"),)),
     ("MONITOR", (("processes", "Processes"), ("network", "Network"))),
+    ("MANAGE", (("applications", "Applications"),)),
     ("SECURITY", (("baseline", "Baseline"), ("findings", "Findings"))),
     ("DEVICE", (("device", "Device"), ("health", "Health"), ("diagnostics", "Diagnostics"))),
 )

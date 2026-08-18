@@ -665,7 +665,7 @@ def test_device_switch_never_shows_stale_information(qtapp) -> None:
 
 def test_window_device_page_is_the_device_destination(qtapp) -> None:
     window = MainWindow()
-    assert window._pages.widget(5).widget() is window.device_page
+    assert window._pages.widget(6).widget() is window.device_page
     assert window.device_page._device is window.device
 
 

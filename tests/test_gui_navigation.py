@@ -204,11 +204,12 @@ def test_navigation_switches_pages(qtapp) -> None:
         "overview": 0,
         "processes": 1,
         "network": 2,
-        "baseline": 3,
-        "findings": 4,
-        "device": 5,
-        "health": 6,
-        "diagnostics": 7,
+        "applications": 3,
+        "baseline": 4,
+        "findings": 5,
+        "device": 6,
+        "health": 7,
+        "diagnostics": 8,
     }
     for key, index in expectations.items():
         window.sidebar.button(key).click()
@@ -234,7 +235,7 @@ def test_unknown_page_request_is_ignored(qtapp) -> None:
     connect_window(window)
     window.sidebar.button("health").click()
     window._on_page_requested("nonsense")
-    assert window._pages.currentIndex() == 6
+    assert window._pages.currentIndex() == 7
     assert window.sidebar.active_page() == "health"
 
 
@@ -355,7 +356,7 @@ def test_overview_drift_link_navigates_to_baseline(qtapp) -> None:
         lambda: window._on_page_requested("baseline")
     )
     window.overview._drift_link.click()
-    assert window._pages.currentIndex() == 3
+    assert window._pages.currentIndex() == 4
     assert window.sidebar.active_page() == "baseline"
 
 
@@ -444,7 +445,7 @@ def test_findings_hosts_incident_panel(qtapp) -> None:
     connect_window(window)
     assert window.incident is not None
     assert window.incident.parent() is not None
-    assert window._pages.widget(4).widget() is window.findings
+    assert window._pages.widget(5).widget() is window.findings
     # the hosted panel still answers generation availability
     window.incident.set_generation_available(True)
     assert window.incident._generation_available is True
@@ -459,7 +460,7 @@ def test_device_panel_on_device_page(qtapp) -> None:
     window = MainWindow()
     connect_window(window)
     window.sidebar.button("device").click()
-    scroll = window._pages.widget(5)
+    scroll = window._pages.widget(6)
     assert scroll.widget() is window.device_page
     assert window.device_page._device is window.device
     assert window.device._status.text() == "\u25cf Connected"
@@ -468,7 +469,7 @@ def test_device_panel_on_device_page(qtapp) -> None:
 def test_health_page_hosts_cpu_memory_battery(qtapp) -> None:
     window = MainWindow()
     connect_window(window)
-    page = window._pages.widget(6).widget()
+    page = window._pages.widget(7).widget()
     children = {child for child in page.findChildren(QWidget)}
     assert window.cpu in children
     assert window.memory in children
