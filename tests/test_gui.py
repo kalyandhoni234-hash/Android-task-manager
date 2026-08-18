@@ -18,6 +18,7 @@ import pytest
 # of failing collection, so `pip install .` + `python -m pytest` works cleanly.
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from android_task_manager import __version__
@@ -1014,6 +1015,50 @@ def test_process_widget_shows_uid_column(qtapp) -> None:
     assert widget._table.item(0, 1).text() == "10001"
 
 
+def test_process_widget_column_sorting(qtapp) -> None:
+    widget = ProcessWidget()
+    widget.set_snapshot(process_snapshot())
+    table = widget._table
+    columns = {
+        "pid": 0,
+        "uid": 1,
+        "cpu": 2,
+        "mem": 3,
+        "state": 4,
+        "name": 5,
+    }
+    widget._on_sort_changed(columns["pid"], Qt.SortOrder.AscendingOrder)
+    table.sortItems(columns["pid"], Qt.SortOrder.AscendingOrder)
+    pids = [table.item(row, 0).text() for row in range(table.rowCount())]
+    assert pids == ["8150", "24791", "90001"]
+    widget._on_sort_changed(columns["mem"], Qt.SortOrder.DescendingOrder)
+    table.sortItems(columns["mem"], Qt.SortOrder.DescendingOrder)
+    # Memory values: 2.0 (8150), 5.5 (24791), N/A (90001) — the N/A row
+    # sinks below the numeric values even in descending order.
+    assert table.item(0, 0).text() == "24791"
+    assert table.item(1, 0).text() == "8150"
+    assert table.item(2, 0).text() == "90001"
+    assert table.item(2, 3).text() == "N/A"
+    widget._on_sort_changed(columns["name"], Qt.SortOrder.AscendingOrder)
+    table.sortItems(columns["name"], Qt.SortOrder.AscendingOrder)
+    assert table.item(0, 0).text() == "8150"  # com.heavy.app
+    assert table.item(2, 0).text() == "90001"  # no.metric.app
+
+
+def test_process_widget_empty_and_large_snapshots(qtapp) -> None:
+    widget = ProcessWidget()
+    widget.set_snapshot(ProcessSnapshot(timestamp=1.0, processes=[]))
+    assert widget._table.rowCount() == 0
+    processes = [
+        ProcessInfo(pid=pid, name=f"pkg.p{pid}", uid=pid, state="S", cpu_percent=float(pid), memory_percent=1.0, category="user")
+        for pid in range(1000, 1000 + 500)
+    ]
+    widget.set_snapshot(ProcessSnapshot(timestamp=1.0, processes=processes))
+    assert widget._table.rowCount() == 500
+    # Default sort (CPU desc) re-applied: the highest %CPU row leads.
+    assert widget._table.item(0, 0).text() == "1499"
+
+
 def test_overview_dashboard_renders_live_metrics(qtapp) -> None:
     window = MainWindow()
     window.update_connection(ConnectionState.CONNECTED, "")
@@ -1072,6 +1117,29 @@ def test_overview_dashboard_clears_on_disconnect(qtapp) -> None:
     window.update_connection(ConnectionState.DISCONNECTED, "")
     assert window.overview._live["cpu"][0].text() == "—"
     assert not plot.samples(0)
+
+
+def test_overview_dashboard_resumes_trends_after_reconnect(qtapp) -> None:
+    window = MainWindow()
+    window.update_connection(ConnectionState.CONNECTED, "")
+    window.update_snapshots(
+        cpu_snapshot(), memory_snapshot(), process_snapshot(), battery_snapshot(), network_snapshot()
+    )
+    window.update_connection(ConnectionState.DISCONNECTED, "")
+    plot = window.overview._live["cpu"][1]
+    assert not plot.samples(0)
+    window.update_connection(ConnectionState.CONNECTED, "")
+    fresh = replace(cpu_snapshot(), aggregate_utilization_percent=9.7)
+    window.update_snapshots(
+        fresh, memory_snapshot(), process_snapshot(), battery_snapshot(), network_snapshot()
+    )
+    # A new session starts a fresh trend: the old value never resurfaces,
+    # and the changed value is sampled exactly once.
+    assert plot.samples(0) == [9.7]
+    window.update_snapshots(
+        fresh, memory_snapshot(), process_snapshot(), battery_snapshot(), network_snapshot()
+    )
+    assert plot.samples(0) == [9.7]
 
 
 def test_device_widget_states(qtapp) -> None:

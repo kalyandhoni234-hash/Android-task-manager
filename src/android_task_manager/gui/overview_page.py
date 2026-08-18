@@ -20,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from ..thresholds import (
@@ -441,7 +442,7 @@ class OverviewPage(QWidget):
         value.setProperty("mono", True)
         value.setTextFormat(Qt.TextFormat.PlainText)
         inner.addWidget(value)
-        plot = HistoryPlotWidget("", [_LIVE_COLOR], max_samples=30, minimum_height=56)
+        plot = HistoryPlotWidget("", [QColor(_LIVE_COLOR)], max_samples=30, minimum_height=56)
         plot.setObjectName("liveMetricPlot")
         inner.addWidget(plot, 1)
         return card, value, plot
