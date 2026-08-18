@@ -282,13 +282,13 @@ class TestProcessTableBadges:
         rows = {}
         for row in range(table.rowCount()):
             pid = int(table.item(row, 0).text())
-            rows[pid] = table.item(row, 4).text()
+            rows[pid] = table.item(row, 5).text()
         assert rows[8150].startswith("[NEW] com.new.app")
         assert rows[8160] == "com.kept.app"
 
         widget.set_new_process_refs(frozenset())
         for row in range(table.rowCount()):
-            assert not table.item(row, 4).text().startswith("[NEW]")
+            assert not table.item(row, 5).text().startswith("[NEW]")
 
     def test_badge_appears_through_the_window_drift_pipeline(self, qtapp):
         window = MainWindow()
@@ -316,7 +316,7 @@ class TestProcessTableBadges:
             network=None,
         )
         table = window.processes.findChild(QTableWidget)
-        assert table.item(0, 4).text().startswith("[NEW] com.new.app")
+        assert table.item(0, 5).text().startswith("[NEW] com.new.app")
 
     def test_new_baseline_clears_badges_through_the_window(self, qtapp):
         window = MainWindow()

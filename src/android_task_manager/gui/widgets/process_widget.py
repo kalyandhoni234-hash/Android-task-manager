@@ -1,4 +1,4 @@
-"""Process widget: metric-bearing process table (PID/CPU/MEM/STATE/NAME).
+"""Process widget: metric-bearing process table (PID/UID/CPU/MEM/STATE/NAME).
 
 The table hides the process spawned by the monitor's own ``top -n 1`` sample
 command — it is internal tooling, not a real app, and matching its exact
@@ -8,7 +8,7 @@ rows are filtered.
 
 The table supports client-side filtering (name/PID, applied to the latest
 snapshot only — no extra ADB traffic) and numeric-aware header sorting
-(PID/CPU/MEM sort by value, not by text). When the currently inspected
+(PID/UID/CPU/MEM sort by value, not by text). When the currently inspected
 process disappears from the table (e.g. the filter hides it), the detail
 panel is reset to the clean "gone" state so no stale action identity can
 survive.
@@ -36,12 +36,13 @@ from . import panel_host
 from .process_inspector_widget import ProcessInspectorWidget
 
 _COLUMN_PID = 0
-_COLUMN_CPU = 1
-_COLUMN_MEM = 2
-_COLUMN_STATE = 3
-_COLUMN_NAME = 4
+_COLUMN_UID = 1
+_COLUMN_CPU = 2
+_COLUMN_MEM = 3
+_COLUMN_STATE = 4
+_COLUMN_NAME = 5
 
-_COLUMNS = ("PID", "CPU", "MEM", "STATE", "NAME")
+_COLUMNS = ("PID", "UID", "CPU", "MEM", "STATE", "NAME")
 
 #: Default presentation order: CPU descending (the established policy).
 _DEFAULT_SORT_COLUMN = _COLUMN_CPU
@@ -69,9 +70,9 @@ def _is_monitor_process(process) -> bool:
 class _SortableItem(QTableWidgetItem):
     """A table cell that sorts by an explicit key, not by its text.
 
-    Numeric keys make PID/CPU/MEM order numerically (100 > 20 > 3); text
-    keys make NAME/STATE order case-insensitively. ``None`` metrics use a
-    key of -inf so "N/A" rows sink below real values.
+    Numeric keys make PID/UID/CPU/MEM order numerically (100 > 20 > 3);
+    text keys make NAME/STATE order case-insensitively. ``None`` metrics
+    use a key of -inf so "N/A" rows sink below real values.
     """
 
     def __init__(self, text: str, key: object) -> None:
@@ -246,8 +247,13 @@ class ProcessWidget(QWidget):
             )
             cpu = process.cpu_percent
             mem = process.memory_percent
+            uid = process.uid
             values = (
                 _SortableItem(str(process.pid), process.pid),
+                _SortableItem(
+                    "N/A" if uid is None else str(uid),
+                    uid if uid is not None else float("-inf"),
+                ),
                 _SortableItem(
                     "N/A" if cpu is None else f"{cpu:.1f}%",
                     cpu if cpu is not None else float("-inf"),

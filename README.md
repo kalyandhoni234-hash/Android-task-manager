@@ -42,11 +42,18 @@ Monitoring is **read-only**. The tool never writes to the device; the three devi
 - **Memory** — `MemAvailable` as the primary pressure indicator (not `MemFree`: cache is reclaimable), used-share, and Total / Available / Free / Cached / Buffers breakdown. Values normalized to KiB.
 - **Battery** — level (`level / scale`), charging status and health (Android enum numbers normalized to human-readable states), voltage, temperature (0.1 °C → °C), technology and power source.
 - **Network** — download/upload throughput from `/proc/net/dev` *deltas* (bytes per second), interface classification (Wi-Fi / Mobile Data / VPN / …) by a documented heuristic, and interface filtering (active-only by default with a *show all* toggle).
+- **Storage** — live used-share of the internal `/data` volume, re-read on its own slow cadence (default 30 s) and classified against the same canonical thresholds as the other metrics.
 - **History graphs** (GUI) — bounded live windows for CPU, memory, network and battery so you can see recent trends, not just the current value.
+
+### 📈 Live Dashboard *(GUI)*
+
+- The **Overview page leads with a LIVE METRICS row**: CPU, RAM, Battery and Storage cards showing the current value, a bounded trend graph and warning/critical coloring from the canonical thresholds (`80%` storage → amber, `90%` → red; battery below `35%` → amber, `20%` → red).
+- Trends are **session-bound**: history resets when the device disconnects, a missing value renders as an honest "—", and a refresh never duplicates a sample for an unchanged metric.
+- The dashboard is pure presentation: it consumes only snapshots the monitor already collected — no extra ADB traffic and no timers of its own.
 
 ### 🔎 Process Monitoring & Inspector
 
-- Live process table (GUI): **PID, CPU%, MEM%, State, Name**, default-sorted by CPU usage, with name filtering and sorting of CPU/memory.
+- Live process table (GUI): **PID, UID, CPU%, MEM%, State, Name**, default-sorted by CPU usage, with name filtering and sorting of CPU/memory.
 - Process classification — a documented heuristic: bracketed names (`[kworker/0:1]`) → kernel thread; `uid < 10000` → system; otherwise → user/app. The monitor's own helper process is hidden from the table.
 - Identity comes from `ps -A -o PID,UID,NAME` (authoritative); dynamic metrics come from `top -n 1` and are merged **by PID** — never by name or row order. `%CPU` above 100 is kept as-is (multi-core), not clamped.
 - **Process Inspector** (GUI) — on-demand, read-once inspection of a selected process:
@@ -303,18 +310,19 @@ android-task-manager-gui
 | `--battery-interval SECONDS` | Seconds between `dumpsys battery` reads | `15.0` |
 | `--network-interval SECONDS` | Seconds between `/proc/net/dev` reads | `5.0` |
 | `--network-investigation-interval SECONDS` | GUI only: seconds between socket-table reads | `10.0` |
+| `--storage-interval SECONDS` | GUI only: seconds between internal-storage reads | `30.0` |
 | `--timeout SECONDS` | Per-command timeout | `10.0` |
 
 Notes: `--interval` is the tick rate; the other intervals are typically slower because the underlying reads are more expensive (processes) or the data changes slowly (memory, battery) — cached snapshots are re-rendered in between. The **first** CPU and network samples report `N/A`: both measurements are deltas, so real values appear from the second sample onward.
 
-The GUI accepts the same `--adb`, `--device`, `--interval`, `--process-interval`, `--battery-interval`, `--memory-interval`, `--network-interval`, `--network-investigation-interval` and `--timeout` flags; it has no `--samples` flag.
+The GUI accepts the same `--adb`, `--device`, `--interval`, `--process-interval`, `--battery-interval`, `--memory-interval`, `--network-interval`, `--network-investigation-interval`, `--storage-interval` and `--timeout` flags; it has no `--samples` flag.
 
 ### GUI layout
 
 The dashboard is organized by a persistent **sidebar** with eight pages, plus a top strip showing the update banner and the live ADB connection state:
 
-- **Overview** — device summary, metric cards (processes, network, drift, HIGH/MEDIUM findings, diagnostics counts), security status and recent activity.
-- **Processes** — table (PID, CPU, MEM, STATE, NAME) sorted by CPU, with filtering/sorting, classification, and the selectable **Process Inspector** panel (details + Network Connections + permission audit).
+- **Overview** — live metrics row (CPU / RAM / Battery / Storage with trends and level coloring), device summary, metric cards (processes, network, drift, HIGH/MEDIUM findings, diagnostics counts), security status and recent activity.
+- **Processes** — table (PID, UID, CPU, MEM, STATE, NAME) sorted by CPU, with filtering/sorting, classification, and the selectable **Process Inspector** panel (details + Network Connections + permission audit).
 - **Network** — download/upload throughput, interface list grouped by type (active by default), history graph.
 - **Baseline** — baseline capture, drift check with suspicious-signal section, investigation timeline/process-tree/why-flagged actions, and session export (JSON/CSV). Saved baselines are **persisted per device** and auto-restored on reconnect ("(loaded)" state).
 - **Findings** — suspicious signals severity-first (HIGH → MEDIUM), each with a *Why?* evidence button, plus incident report generation (view + export JSON/HTML/PDF).
@@ -398,7 +406,7 @@ Both builds embed the product icon (`packaging/assets/atm.ico`) and a Windows ve
 
 Every release publishes its executables **together with `SHA256SUMS.txt`**, and the product website shows the checksum of the exact published EXE — so you can verify what you downloaded. Release pages: <https://github.com/kalyandhoni234-hash/Android-task-manager/releases>
 
-> **Version note:** `v0.4.5`–`v0.4.8` were **internal development checkpoints** (Phase 1 — diagnostics, ADB reliability, worker observability, engineering quality; Phase 2A — device information architecture; Phase 2B — CPU & hardware intelligence; Phase 2C — GPU & display intelligence; Phase 2D — battery & storage intelligence: static battery facts (design capacity, cycle count) and the internal-volume filesystem type; dynamic battery data stays with the live battery monitor; plus the device diagnostics engine & page, device report export, per-device baseline persistence and release hygiene). No release was published for any of them; the first public release of this work is **v0.5.0** (current).
+> **Version note:** `v0.4.5`–`v0.4.8` were **internal development checkpoints** (Phase 1 — diagnostics, ADB reliability, worker observability, engineering quality; Phase 2A — device information architecture; Phase 2B — CPU & hardware intelligence; Phase 2C — GPU & display intelligence; Phase 2D — battery & storage intelligence: static battery facts (design capacity, cycle count) and the internal-volume filesystem type; dynamic battery data stays with the live battery monitor; plus the device diagnostics engine & page, device report export, per-device baseline persistence and release hygiene). No release was published for any of them; the first public release of this work is **v0.5.0** (current). **v0.6.0** is the in-development checkpoint adding the live dashboard (CPU/RAM/Battery/Storage trends on the Overview page), the live storage metric (its own slow monitor cadence), the process-table UID column, and the `--storage-interval` flag; it has not been tagged or released yet.
 
 ## 🌐 Product Website
 

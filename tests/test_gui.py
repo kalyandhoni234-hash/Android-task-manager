@@ -56,6 +56,7 @@ from android_task_manager.network_investigation.models import (
 )
 from android_task_manager.process.inspector_models import ProcessInspectionSnapshot
 from android_task_manager.process.models import ProcessInfo, ProcessSnapshot
+from android_task_manager.storage.models import StorageSnapshot
 
 
 @pytest.fixture(scope="module")
@@ -259,6 +260,10 @@ def _device_responses() -> dict[str, str]:
         "pm list packages -U": (
             "package:com.google.android.youtube uid:10181\n"
             "package:com.instagram.android uid:10203\n"
+        ),
+        "df -k /data": (
+            "Filesystem      1K-blocks     Used Available Use% Mounted on\n"
+            "/dev/block/sda11 121934848 69120000 52814848 57% /data\n"
         ),
     }
 
@@ -508,8 +513,8 @@ def test_process_widget_receives_snapshot_sorted_by_cpu_desc(qtapp) -> None:
     assert widget._table.item(0, 0).text() == "8150"
     assert widget._table.item(1, 0).text() == "24791"
     assert widget._table.item(2, 0).text() == "90001"
-    assert widget._table.item(0, 1).text() == "120.4%"
-    assert widget._table.item(2, 1).text() == "N/A"
+    assert widget._table.item(0, 2).text() == "120.4%"
+    assert widget._table.item(2, 2).text() == "N/A"
 
 
 def _network_col0(widget) -> list[str]:
@@ -992,6 +997,83 @@ def test_process_widget_keeps_similarly_named_processes(qtapp) -> None:
     assert pids == {"11", "12", "13"}
 
 
+def test_process_widget_shows_uid_column(qtapp) -> None:
+    snapshot = ProcessSnapshot(
+        timestamp=1.0,
+        processes=[
+            ProcessInfo(pid=8150, name="com.heavy.app", uid=10001, state="R", cpu_percent=120.4, memory_percent=2.0, category="user"),
+            ProcessInfo(pid=90001, name="no.metric.app", uid=None, state=None, cpu_percent=None, memory_percent=None, category="user"),
+        ],
+    )
+    widget = ProcessWidget()
+    widget.set_snapshot(snapshot)
+    assert widget._table.horizontalHeaderItem(1).text() == "UID"
+    uids = {widget._table.item(row, 1).text() for row in range(widget._table.rowCount())}
+    assert uids == {"10001", "N/A"}
+    # The missing uid sorts below the real value (never equal to 0).
+    assert widget._table.item(0, 1).text() == "10001"
+
+
+def test_overview_dashboard_renders_live_metrics(qtapp) -> None:
+    window = MainWindow()
+    window.update_connection(ConnectionState.CONNECTED, "")
+    window.update_snapshots(
+        cpu_snapshot(), memory_snapshot(), process_snapshot(), battery_snapshot(), network_snapshot()
+    )
+    window.update_storage(
+        StorageSnapshot(
+            timestamp=1.0,
+            mount="/data",
+            total_kb=121934848,
+            used_kb=69120000,
+            available_kb=52814848,
+        )
+    )
+    assert window.overview._live["cpu"][0].text() == "12.4%"
+    assert window.overview._live["ram"][0].text() == "71% used"
+    assert window.overview._live["battery"][0].text() == "38%"
+    assert window.overview._live["storage"][0].text() == "57%"
+    # Every metric also feeds its bounded trend plot.
+    assert window.overview._live["cpu"][1].samples(0) == [12.4]
+    assert window.overview._live["storage"][1].samples(0) == pytest.approx([56.686], abs=0.001)
+
+
+def test_overview_dashboard_colors_levels_from_canonical_thresholds(qtapp) -> None:
+    window = MainWindow()
+    window.update_connection(ConnectionState.CONNECTED, "")
+    high_cpu = replace(cpu_snapshot(), aggregate_utilization_percent=92.0)
+    window.update_snapshots(high_cpu, memory_snapshot(), process_snapshot(), battery_snapshot(), network_snapshot())
+    assert window.overview._live["cpu"][0].property("level") == "high"
+    low_battery = replace(battery_snapshot(), level_percent=15.0)
+    window.update_snapshots(cpu_snapshot(), memory_snapshot(), process_snapshot(), low_battery, network_snapshot())
+    assert window.overview._live["battery"][0].property("level") == "high"
+    assert window.overview._live["cpu"][0].property("level") == "normal"
+
+
+def test_overview_dashboard_unavailable_metric_is_honest(qtapp) -> None:
+    window = MainWindow()
+    window.update_connection(ConnectionState.CONNECTED, "")
+    window.update_snapshots(
+        cpu_snapshot(), memory_snapshot(), process_snapshot(), battery_snapshot(), network_snapshot()
+    )
+    window.update_storage(None)
+    assert window.overview._live["storage"][0].text() == "—"
+    assert window.overview._live["storage"][0].property("level") == "normal"
+
+
+def test_overview_dashboard_clears_on_disconnect(qtapp) -> None:
+    window = MainWindow()
+    window.update_connection(ConnectionState.CONNECTED, "")
+    window.update_snapshots(
+        cpu_snapshot(), memory_snapshot(), process_snapshot(), battery_snapshot(), network_snapshot()
+    )
+    plot = window.overview._live["cpu"][1]
+    assert plot.samples(0) == [12.4]
+    window.update_connection(ConnectionState.DISCONNECTED, "")
+    assert window.overview._live["cpu"][0].text() == "—"
+    assert not plot.samples(0)
+
+
 def test_device_widget_states(qtapp) -> None:
     widget = DeviceWidget()
     widget.set_status(ConnectionState.CONNECTED, "")
@@ -1067,6 +1149,54 @@ def test_worker_caches_failed_subsystems(qtapp) -> None:
     assert battery is None
     assert network is None
     assert ConnectionState.COLLECTOR_ERROR in {state for state, _ in states}
+
+
+def test_worker_storage_emitted_with_verified_fixture(qtapp) -> None:
+    worker = MonitorWorker(connection=_FakeConnection(_device_responses()))
+    received: dict = {}
+    worker.storage_snapshot.connect(lambda snapshot: received.setdefault("storage", snapshot))
+    worker._connect()
+    worker.tick()
+    assert isinstance(received["storage"], StorageSnapshot)
+    assert received["storage"].mount == "/data"
+    assert received["storage"].used_percent == pytest.approx(56.686, abs=0.001)
+
+
+def test_worker_storage_unavailable_is_none_not_exception(qtapp) -> None:
+    responses = _device_responses()
+    responses["df -k /data"] = "df: /data: Permission denied\n"
+    worker = MonitorWorker(connection=_FakeConnection(responses))
+    received: dict = {}
+    worker.storage_snapshot.connect(lambda snapshot: received.setdefault("storage", snapshot))
+    worker._connect()
+    worker.tick()
+    assert "storage" not in received
+
+
+def test_worker_storage_follows_interval_cadence(qtapp) -> None:
+    connection = _FakeConnection(_device_responses())
+    worker = MonitorWorker(connection=connection)
+    worker._connect()
+    df_calls = lambda: sum(  # noqa: E731 - tiny local helper
+        1 for call in connection.calls if call == ["df", "-k", "/data"]
+    )
+    baseline = df_calls()
+    worker.tick()
+    worker.tick()
+    # Within the default 30s cadence the second tick reuses the cached
+    # snapshot: exactly one storage sample per session start.
+    assert df_calls() - baseline == 1
+
+    fast_connection = _FakeConnection(_device_responses())
+    fast = MonitorWorker(connection=fast_connection, storage_interval=0.0)
+    fast._connect()
+    fast_df = lambda: sum(  # noqa: E731 - tiny local helper
+        1 for call in fast_connection.calls if call == ["df", "-k", "/data"]
+    )
+    fast_baseline = fast_df()
+    fast.tick()
+    fast.tick()
+    assert fast_df() - fast_baseline == 2
 
 
 def test_worker_unauthorized_no_crash(qtapp) -> None:
