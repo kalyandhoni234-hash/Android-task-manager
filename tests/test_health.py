@@ -24,7 +24,7 @@ from android_task_manager.health import (
 )
 from android_task_manager.memory.models import MemorySnapshot
 from android_task_manager.network.models import NetworkInterfaceSnapshot, NetworkSnapshot
-from android_task_manager.process.models import ProcessInfo, ProcessSnapshot
+from android_task_manager.process.models import ProcessCategory, ProcessInfo, ProcessSnapshot
 from android_task_manager.storage.models import StorageSnapshot
 from android_task_manager.thresholds import (
     BATTERY_LEVEL_ELEVATED_PERCENT,
@@ -106,7 +106,7 @@ def _user_process(cpu_percent: float | None, memory_percent: float | None, name=
         state="R",
         cpu_percent=cpu_percent,
         memory_percent=memory_percent,
-        category="user",
+        category=ProcessCategory.USER,
     )
 
 
@@ -319,11 +319,11 @@ def test_storage_findings() -> None:
 def test_process_cpu_finding_ignores_system_and_kernel() -> None:
     kernel = ProcessInfo(
         pid=17, name="kworker/0:1", uid=0, state="R",
-        cpu_percent=CPU_HIGH_PERCENT, memory_percent=1.0, category="kernel",
+        cpu_percent=CPU_HIGH_PERCENT, memory_percent=1.0, category=ProcessCategory.KERNEL_THREAD,
     )
     system = ProcessInfo(
         pid=1054, name="system_server", uid=1000, state="R",
-        cpu_percent=CPU_HIGH_PERCENT, memory_percent=1.0, category="system",
+        cpu_percent=CPU_HIGH_PERCENT, memory_percent=1.0, category=ProcessCategory.SYSTEM,
     )
     health = evaluate_device_health(
         processes=_processes(kernel, system),

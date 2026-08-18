@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time as _time
 from dataclasses import replace
 from datetime import datetime
 
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
 from .. import __version__
 from ..action.models import ActionResult
 from ..applications import AppCategory, AppDetails, ApplicationSnapshot
+from ..automation import AutomationEngine, AutomationTask
 from ..baseline import (
     BaselineSnapshot,
     BaselineStore,
@@ -38,7 +40,15 @@ from ..device.models import DeviceInformation
 from ..device_report import DeviceReportPayload, device_report_filename
 from ..diagnostics.evaluate import evaluate as evaluate_diagnostics
 from ..diagnostics.models import DiagnosticReport, DiagnosticSeverity
+from ..health import DeviceHealth, evaluate_device_health
 from ..heuristics import HeuristicReport
+from ..history.session import (
+    METRIC_BATTERY,
+    METRIC_CPU,
+    METRIC_MEMORY,
+    METRIC_STORAGE,
+    SessionHistory,
+)
 from ..incident.builder import build_incident_report
 from ..incident.models import SOURCE_GUI, IncidentReport
 from ..incident.renderers import report_filename
@@ -54,7 +64,25 @@ from ..network_investigation.models import NetworkInvestigationSnapshot
 from ..permissions.models import PackagePermissionAudit
 from ..process.inspector_models import ProcessInspectionSnapshot
 from ..process.models import ProcessSnapshot
+from ..recommend import Recommendation, recommend
+from ..rules import Rule, RuleEngine, RuleOperator, RuleSeverity
 from ..storage.models import StorageSnapshot
+from ..thresholds import (
+    BATTERY_LEVEL_ELEVATED_PERCENT,
+    BATTERY_LEVEL_HIGH_PERCENT,
+    CPU_HIGH_PERCENT,
+    MEMORY_USED_HIGH_PERCENT,
+    STORAGE_USED_HIGH_PERCENT,
+)
+from ..timeline import (
+    EVENT_ACTION_EXECUTED,
+    EVENT_DEVICE_CONNECTED,
+    EVENT_DEVICE_DISCONNECTED,
+    EVENT_HEALTH_CHANGED,
+    EVENT_RECOMMENDATION,
+    EVENT_RULE_FIRED,
+    EventTimeline,
+)
 from ..updater import UpdateCheckResult
 from .apps_page import ApplicationsPage
 from .connection_strip import ConnectionStrip
@@ -63,6 +91,7 @@ from .diagnostics_dialog import DiagnosticsDialog
 from .diagnostics_page import DiagnosticsPage
 from .findings_page import FindingsPage
 from .incident_dialog import IncidentDialog
+from .intelligence_page import IntelligencePage, IntelligenceState
 from .investigation_dialog import InvestigationDialog
 from .monitor import ConnectionState, MonitorWorker
 from .overview_page import OverviewPage, OverviewState
@@ -92,6 +121,86 @@ def _memory_used_percent(memory: MemorySnapshot | None) -> float | None:
         return None
     used = max(0, memory.total_kb - memory.available_kb)
     return used / memory.total_kb * 100
+
+
+# ---------------------------------------------------------------------------
+# Builtin intelligence rules (canonical thresholds, never restated values)
+# ---------------------------------------------------------------------------
+
+_BUILTIN_RULES: tuple[Rule, ...] = (
+    Rule(
+        rule_id="cpu_high",
+        metric=METRIC_CPU,
+        operator=RuleOperator.GE,
+        threshold=CPU_HIGH_PERCENT,
+        severity=RuleSeverity.WARNING,
+        title="CPU utilization is high",
+        description="Aggregate CPU utilization reaches the high threshold.",
+        cooldown=60.0,
+    ),
+    Rule(
+        rule_id="cpu_sustained_high",
+        metric=METRIC_CPU,
+        operator=RuleOperator.GE,
+        threshold=CPU_HIGH_PERCENT,
+        severity=RuleSeverity.CRITICAL,
+        title="CPU utilization sustained high",
+        description="Aggregate CPU utilization stays at/above the high threshold.",
+        duration=60.0,
+        cooldown=300.0,
+    ),
+    Rule(
+        rule_id="memory_high",
+        metric=METRIC_MEMORY,
+        operator=RuleOperator.GE,
+        threshold=MEMORY_USED_HIGH_PERCENT,
+        severity=RuleSeverity.WARNING,
+        title="Memory pressure is high",
+        description="Used memory reaches the high threshold.",
+        cooldown=60.0,
+    ),
+    Rule(
+        rule_id="memory_sustained_high",
+        metric=METRIC_MEMORY,
+        operator=RuleOperator.GE,
+        threshold=MEMORY_USED_HIGH_PERCENT,
+        severity=RuleSeverity.CRITICAL,
+        title="Memory pressure sustained high",
+        description="Used memory stays at/above the high threshold.",
+        duration=120.0,
+        cooldown=300.0,
+    ),
+    Rule(
+        rule_id="battery_low",
+        metric=METRIC_BATTERY,
+        operator=RuleOperator.LE,
+        threshold=BATTERY_LEVEL_ELEVATED_PERCENT,
+        severity=RuleSeverity.WARNING,
+        title="Battery level is low",
+        description="Battery level is at/below the elevated threshold.",
+        cooldown=300.0,
+    ),
+    Rule(
+        rule_id="battery_critical",
+        metric=METRIC_BATTERY,
+        operator=RuleOperator.LE,
+        threshold=BATTERY_LEVEL_HIGH_PERCENT,
+        severity=RuleSeverity.CRITICAL,
+        title="Battery level is critical",
+        description="Battery level is at/below the critical threshold.",
+        cooldown=600.0,
+    ),
+    Rule(
+        rule_id="storage_high",
+        metric=METRIC_STORAGE,
+        operator=RuleOperator.GE,
+        threshold=STORAGE_USED_HIGH_PERCENT,
+        severity=RuleSeverity.WARNING,
+        title="Storage utilization is high",
+        description="Used internal storage reaches the high threshold.",
+        cooldown=300.0,
+    ),
+)
 
 
 class MainWindow(QMainWindow):
@@ -181,6 +290,7 @@ class MainWindow(QMainWindow):
         self._latest_cpu: CPUSnapshot | None = None
         self._latest_memory: MemorySnapshot | None = None
         self._latest_battery: BatterySnapshot | None = None
+        self._latest_network: NetworkSnapshot | None = None
 
         #: Most recent live storage snapshot (internal /data volume),
         #: published by the monitor on its own slow cadence.
@@ -239,6 +349,21 @@ class MainWindow(QMainWindow):
         self._why_dialog: WhyFlaggedDialog | None = None
         self._diagnostics_dialog: DiagnosticsDialog | None = None
 
+        #: Device intelligence state (v0.8): the session history, the
+        #: per-session event timeline, the builtin rules, the latest health
+        #: evaluation, the derived recommendations and the automation
+        #: engine. All pure/deterministic — they consume the snapshots the
+        #: monitor already publishes (zero additional ADB traffic).
+        self._session_history = SessionHistory()
+        self._timeline = EventTimeline()
+        self._rules = RuleEngine(_BUILTIN_RULES)
+        self._health: DeviceHealth | None = None
+        self._recommendations: tuple[Recommendation, ...] = ()
+        self._rule_fires: tuple[str, ...] = ()
+        self._automation = AutomationEngine()
+        self._pending_automation_task: AutomationTask | None = None
+        self._latest_app_snapshot: ApplicationSnapshot | None = None
+
         self.processes.inspection_requested.connect(self.inspect_requested.emit)
         self.processes.inspector.action_requested.connect(self._on_action_clicked)
         self.processes.inspector.manage_requested.connect(self._on_manage_requested)
@@ -272,6 +397,8 @@ class MainWindow(QMainWindow):
         self.findings.why_requested.connect(self._on_why_requested)
         self.device_page = DevicePage(self.device)
         self.diagnostics_page = DiagnosticsPage()
+        self.intelligence = IntelligencePage()
+        self.intelligence.apply_requested.connect(self._on_recommendation_applied)
         self.device_page.export_requested.connect(self._on_device_report_export_requested)
 
         self._pages = QStackedWidget()
@@ -285,6 +412,7 @@ class MainWindow(QMainWindow):
         self._pages.addWidget(self._scrolled(self.device_page))  # 6: DEVICE
         self._pages.addWidget(self._scrolled(self._health_page()))  # 7: HEALTH
         self._pages.addWidget(self._scrolled(self.diagnostics_page))  # 8: DIAGNOSTICS
+        self._pages.addWidget(self._scrolled(self.intelligence))  # 9: INTELLIGENCE
 
         self.sidebar.set_active(DEFAULT_PAGE)
         self._pages.setCurrentIndex(0)
@@ -345,6 +473,7 @@ class MainWindow(QMainWindow):
             "device": 6,
             "health": 7,
             "diagnostics": 8,
+            "intelligence": 9,
         }
         index = order.get(key)
         if index is None:
@@ -471,6 +600,144 @@ class MainWindow(QMainWindow):
             )
 
     # ------------------------------------------------------------------
+    # Device intelligence (v0.8): pure evaluation over existing snapshots
+    # ------------------------------------------------------------------
+
+    def _record_metric_samples(self, timestamp: float | None) -> None:
+        """Record one sample per live metric into the session history."""
+        self._session_history.record(
+            cpu_used_percent=(
+                self._latest_cpu.aggregate_utilization_percent
+                if self._latest_cpu is not None
+                else None
+            ),
+            memory_used_percent=_memory_used_percent(self._latest_memory),
+            battery_level_percent=(
+                self._latest_battery.level_percent
+                if self._latest_battery is not None
+                else None
+            ),
+            storage_used_percent=(
+                self._latest_storage.used_percent
+                if self._latest_storage is not None
+                else None
+            ),
+            timestamp=timestamp,
+        )
+
+    def _evaluate_intelligence(self) -> None:
+        """Run the deterministic intelligence pipeline on the GUI thread.
+
+        Pure evaluation over already-collected snapshots: history is
+        recorded by the snapshot handlers, rules fire through the bounded
+        session history, health is derived from the live mirrors, and
+        recommendations follow deterministically. Timeline transitions
+        record only meaningful state flips.
+        """
+        if self._connection_state is not ConnectionState.CONNECTED:
+            self._health = None
+            self._recommendations = ()
+            self._rule_fires = ()
+            self._refresh_intelligence()
+            return
+        now = _time.monotonic()
+        fires = self._rules.evaluate(self._session_history, now)
+        if fires:
+            self._rule_fires = tuple(
+                f"{fire.message}" for fire in fires
+            )
+            for fire in fires:
+                self._timeline.record(
+                    EVENT_RULE_FIRED,
+                    f"Rule fired: {fire.message}",
+                    f"{fire.rule_id} fired at monotonic {now:.0f}",
+                    monotonic=now,
+                    wall_clock=datetime.now(),
+                    device_serial=self._device_serial,
+                    severity=(
+                        "critical"
+                        if fire.rule_id in ("cpu_sustained_high", "memory_sustained_high", "battery_critical")
+                        else "warning"
+                    ),
+                )
+        else:
+            self._rule_fires = ()
+        self._evaluate_health(now)
+        self._evaluate_recommendations(now)
+        self._refresh_intelligence()
+
+    def _evaluate_health(self, now: float) -> None:
+        """Derive the unified device health from the latest snapshots."""
+        health = evaluate_device_health(
+            cpu=self._latest_cpu,
+            memory=self._latest_memory,
+            battery=self._latest_battery,
+            storage=self._latest_storage,
+            processes=self._latest_processes,
+            network=self._latest_network,
+            applications_available=self._latest_app_snapshot is not None,
+            device_serial=self._device_serial,
+            now=now,
+        )
+        previous_status = self._health.status if self._health is not None else None
+        self._health = health
+        if previous_status is not None and previous_status is not health.status:
+            self._timeline.record_transition(
+                "health",
+                health.status.value,
+                EVENT_HEALTH_CHANGED,
+                f"Device health: {health.status.value}",
+                (
+                    f"Overall score {health.overall_score:.0f} — "
+                    if health.overall_score is not None
+                    else ""
+                )
+                + (
+                    ", ".join(
+                        f"{key}={component.status.value}"
+                        for key, component in health.components.items()
+                    )
+                ),
+                monotonic=now,
+                wall_clock=datetime.now(),
+                device_serial=self._device_serial,
+                severity=health.status.value,
+            )
+
+    def _evaluate_recommendations(self, now: float) -> None:
+        """Derive recommendations from the health findings; record new ones
+        on the timeline (each distinct recommendation set once)."""
+        recommendations = recommend(self._health, self._latest_processes)
+        if recommendations != self._recommendations:
+            self._recommendations = recommendations
+            if recommendations:
+                for rec in recommendations:
+                    self._timeline.record(
+                        EVENT_RECOMMENDATION,
+                        f"Recommendation: {rec.title}",
+                        rec.rationale,
+                        monotonic=now,
+                        wall_clock=datetime.now(),
+                        device_serial=self._device_serial,
+                        severity=rec.severity,
+                        entity=rec.target,
+                    )
+        self._refresh_intelligence()
+
+    def _refresh_intelligence(self) -> None:
+        """Render the intelligence engines' current outputs on the page."""
+        self.intelligence.refresh(
+            IntelligenceState(
+                connected=self._connection_state is ConnectionState.CONNECTED,
+                health=self._health,
+                recommendations=self._recommendations,
+                timeline=self._timeline.events,
+                rule_fires=self._rule_fires,
+                automation_tasks=self._automation.tasks,
+            )
+        )
+
+    # ------------------------------------------------------------------
     # Monitor signal handlers (GUI thread)
     # ------------------------------------------------------------------
 
@@ -505,8 +772,11 @@ class MainWindow(QMainWindow):
             self._latest_battery = battery
             self.battery.set_snapshot(battery)
         if network is not None:
+            self._latest_network = network
             self.network.set_snapshot(network)
+        self._record_metric_samples(self._latest_cpu.timestamp if self._latest_cpu else None)
         self._evaluate_diagnostics()
+        self._evaluate_intelligence()
         self._refresh_overview()
         self._refresh_device_page()
 
@@ -537,6 +807,8 @@ class MainWindow(QMainWindow):
     def update_storage(self, snapshot: StorageSnapshot | None) -> None:
         """Adopt the monitor's latest storage snapshot (None = unavailable)."""
         self._latest_storage = snapshot
+        self._record_metric_samples(_time.monotonic())
+        self._evaluate_intelligence()
         self._refresh_overview()
         self._refresh_device_page()
 
@@ -550,6 +822,16 @@ class MainWindow(QMainWindow):
         self.connection_strip.set_state(state, detail)
         if state is ConnectionState.CONNECTED:
             self._stack.setCurrentIndex(1)
+            self._timeline.record_transition(
+                "device_connection",
+                "connected",
+                EVENT_DEVICE_CONNECTED,
+                "Device connected",
+                detail or "The device is connected.",
+                monotonic=_time.monotonic(),
+                wall_clock=datetime.now(),
+                device_serial=self._device_serial,
+            )
         else:
             # No device: stale identity facts and telemetry must never
             # linger on the pages — clear the mirrors the overview and the
@@ -558,15 +840,31 @@ class MainWindow(QMainWindow):
             self._latest_cpu = None
             self._latest_memory = None
             self._latest_battery = None
+            self._latest_network = None
             self._latest_storage = None
             self._latest_processes = None
             self._latest_network_investigation = None
+            self._latest_app_snapshot = None
             self._diagnostics_report = None
+            self._health = None
+            self._recommendations = ()
+            self._rule_fires = ()
+            self._pending_automation_task = None
             self._device_serial = None
+            self._timeline.record_transition(
+                "device_connection",
+                "disconnected",
+                EVENT_DEVICE_DISCONNECTED,
+                "Device disconnected",
+                detail or "The device connection was lost.",
+                monotonic=_time.monotonic(),
+                wall_clock=datetime.now(),
+            )
             self.diagnostics_page.refresh(None, False)
             self.apps.clear()
             self._stack.setCurrentIndex(0)
             self.setup.show_state(state, detail)
+        self._refresh_intelligence()
         self._refresh_overview()
         self._refresh_device_page()
 
@@ -580,6 +878,14 @@ class MainWindow(QMainWindow):
         captured in this session always wins over disk state.
         """
         self._device_serial = serial
+        # Per-session intelligence state: history, timeline and cooldowns
+        # belong to one device session and reset with it. The serial is
+        # already read by the monitor's connect — no additional ADB traffic.
+        now = _time.monotonic()
+        self._session_history.begin_session(serial, timestamp=now)
+        self._timeline.begin_session(serial, monotonic=now)
+        self._rules.begin_session()
+        self._automation.begin_session()
         self._auto_load_baseline()
 
     def show_usb_help(self) -> None:
@@ -659,6 +965,92 @@ class MainWindow(QMainWindow):
             if result.action in ("enable", "disable"):
                 self.apps_detail_requested.emit(result.package_name)
             self.apps_refresh_requested.emit()
+        self._finalize_automation_task(result)
+
+    def _finalize_automation_task(self, result: ActionResult) -> None:
+        """Record an automation task's outcome after the worker reported it.
+
+        The automation engine's gates were checked before the request was
+        dispatched (approval, destructive, cooldown, loop protection); this
+        applies the engine's bookkeeping (cooldown, execution budget, task
+        status) after the typed result, and logs the executed action on the
+        timeline.
+        """
+        pending = self._pending_automation_task
+        if pending is None:
+            return
+        if pending.action != result.action or pending.target != result.package_name:
+            return
+        self._pending_automation_task = None
+        now = _time.monotonic()
+        task = self._automation.record_result(
+            pending.task_id, result.success, now, result.message
+        )
+        if task is not None:
+            self._timeline.record(
+                EVENT_ACTION_EXECUTED,
+                (
+                    f"Automation executed: {result.action} {result.package_name}"
+                    if result.success
+                    else f"Automation action failed: {result.action} {result.package_name}"
+                ),
+                task.message,
+                monotonic=now,
+                wall_clock=datetime.now(),
+                device_serial=self._device_serial,
+                severity="info",
+                entity=result.package_name,
+            )
+        self._refresh_intelligence()
+
+    def _on_recommendation_applied(self, recommendation: Recommendation) -> None:
+        """Apply a recommendation's action.
+
+        Two safe paths, split by automation eligibility:
+
+        * ``automation_allowed`` recommendations (never destructive) run
+          through the automation engine: the user's click is the explicit
+          approval, then the engine's gates (cooldown, loop protection)
+          decide, and the action is dispatched to the action worker.
+        * Everything else (destructive force-stop recommendations) runs
+          through the standard v0.7 user-action path with the same explicit
+          confirmation the application pages require — automation never
+          touches destructive actions.
+        """
+        if recommendation.action is None or recommendation.target is None:
+            return
+        if recommendation.automation_allowed:
+            self._apply_automated_recommendation(recommendation)
+            return
+        if recommendation.destructive and not self._confirm_apps_action(
+            recommendation.action,
+            recommendation.target,
+            "Run Recommended Action?",
+        ):
+            return
+        self.action_requested.emit(recommendation.action, recommendation.target)
+
+    def _apply_automated_recommendation(self, recommendation: Recommendation) -> None:
+        """Dispatch an automation-eligible recommendation safely."""
+        now = _time.monotonic()
+        task = self._automation.submit(recommendation, now)
+        if task.status.value == "failed":
+            QMessageBox.information(self, "Recommendation unavailable", task.message)
+            self._refresh_intelligence()
+            return
+        task = self._automation.approve(task.task_id, now)
+        if task is None:
+            return
+        gated = self._automation.gate(task.task_id, now)
+        if gated is None:
+            return
+        if gated.status.value in ("blocked", "failed"):
+            QMessageBox.information(self, "Action not run", gated.message)
+            self._refresh_intelligence()
+            return
+        self._pending_automation_task = gated
+        self.action_requested.emit(gated.action, gated.target)
+        self._refresh_intelligence()
 
     def on_packages_ready(self, packages: set[str]) -> None:
         """Forward the verified package list to the inspector panel."""
@@ -676,7 +1068,9 @@ class MainWindow(QMainWindow):
 
     def on_apps_inventory_ready(self, snapshot: ApplicationSnapshot) -> None:
         """Adopt the fresh installed-application inventory."""
+        self._latest_app_snapshot = snapshot
         self.apps.set_snapshot(snapshot)
+        self._evaluate_intelligence()
         self._refresh_overview()
 
     def on_apps_inventory_failed(self, message: str) -> None:
@@ -1263,6 +1657,18 @@ def wire_actions(window: MainWindow, monitor: MonitorWorker, actions) -> None:
     # a CONNECTED state triggers the package-list refresh there, never on
     # the GUI thread (the old lambda ran in the emitting thread's context).
     monitor.connection_changed.connect(actions.on_connection_changed)
+    # The automation engine's gate requires a configured executor before any
+    # dispatch; the GUI executor reuses the same async worker (the request is
+    # queued onto its thread and the typed result returns through
+    # ``action_completed`` → ``record_result``). The placeholder result is
+    # never used by the GUI flow — the worker's real result supersedes it.
+    def _dispatch(action: str, target: str) -> ActionResult:
+        window.action_requested.emit(action, target)
+        return ActionResult(
+            action, target, True, "Dispatched to the action worker."
+        )
+
+    window._automation.set_executor(_dispatch)
 
 
 def wire_apps(window: MainWindow, monitor: MonitorWorker, apps, actions) -> None:

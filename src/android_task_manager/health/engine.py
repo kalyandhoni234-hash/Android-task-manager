@@ -13,7 +13,7 @@ from ..battery.models import BatterySnapshot
 from ..cpu.models import CPUSnapshot
 from ..memory.models import MemorySnapshot
 from ..network.models import NetworkSnapshot
-from ..process.models import ProcessSnapshot
+from ..process.models import ProcessCategory, ProcessSnapshot
 from ..storage.models import StorageSnapshot
 from ..thresholds import (
     CPU_ELEVATED_PERCENT,
@@ -56,7 +56,7 @@ _PROCESS_MEMORY_WARNING_PERCENT = MEMORY_USED_HIGH_PERCENT
 
 #: Process findings are reported for USER apps only — kernel threads and
 #: system processes are excluded from "resource-intensive" claims.
-_PROCESS_CATEGORY_USER = "user"
+_PROCESS_CATEGORY_USER = ProcessCategory.USER
 
 #: Connectivity is considered active when at least one non-loopback
 #: interface is present.

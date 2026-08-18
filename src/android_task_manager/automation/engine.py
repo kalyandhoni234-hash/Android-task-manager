@@ -85,6 +85,17 @@ class AutomationEngine:
         self._next_id = 1
         self._targets = {}
 
+    def set_executor(
+        self, executor: Callable[[str, str], ActionResult] | None
+    ) -> None:
+        """Wire (or detach) the action executor used by :meth:`execute`.
+
+        The engine is pure by default — the GUI injects a callable that
+        reuses the v0.7 action layer, while tests inject fakes. May be
+        called again to replace a stale executor after a reconnect.
+        """
+        self._executor = executor
+
     # ------------------------------------------------------------------
     # Scheduling
     # ------------------------------------------------------------------
@@ -181,6 +192,103 @@ class AutomationEngine:
     # Execution
     # ------------------------------------------------------------------
 
+    def gate(self, task_id: str, now: float) -> AutomationTask | None:
+        """Validate that *task_id* may execute, without executing it.
+
+        Runs exactly the same checks as :meth:`execute` (approval,
+        destructive, cooldown, loop protection, executor availability)
+        but never calls the executor. On success the task is returned
+        unchanged (still WAITING_APPROVAL); on failure the task status
+        becomes BLOCKED/FAILED with the reason. Used by GUI flows that
+        execute the action through an asynchronous worker.
+        """
+        task = self._tasks.get(task_id)
+        if task is None:
+            return None
+        if task.status is not AutomationStatus.WAITING_APPROVAL:
+            return task
+        if task.approved_at is None:
+            return self._update(
+                task,
+                AutomationStatus.BLOCKED,
+                message="Execution requires explicit approval.",
+            )
+        if task.action in DESTRUCTIVE_ACTIONS:
+            return self._update(
+                task,
+                AutomationStatus.BLOCKED,
+                message=(
+                    "Destructive actions never run through automation; "
+                    "execute this one manually from the application page."
+                ),
+            )
+        if self._executor is None:
+            return self._update(
+                task,
+                AutomationStatus.FAILED,
+                message="No action executor is configured.",
+            )
+        refusal = self._gate_refusal(task, now)
+        if refusal is not None:
+            return refusal
+        return task
+
+    def record_result(
+        self, task_id: str, success: bool, now: float, message: str = ""
+    ) -> AutomationTask | None:
+        """Record the outcome of an externally executed task.
+
+        The GUI runs approved actions through its asynchronous action
+        worker; this applies the same bookkeeping :meth:`execute` would
+        (target cooldown, loop-protection budget, task status) after the
+        worker reported the typed result.
+        """
+        task = self._tasks.get(task_id)
+        if task is None:
+            return None
+        if success:
+            state = self._targets.get((task.action, task.target))
+            executions = state.executions if state is not None else 0
+            self._targets[(task.action, task.target)] = _TargetState(
+                last_run_at=now, executions=executions + 1
+            )
+            return self._update(
+                task,
+                AutomationStatus.SUCCEEDED,
+                message=message,
+                executed_at=now,
+            )
+        return self._update(
+            task,
+            AutomationStatus.FAILED,
+            message=message or "The action failed on the device.",
+            executed_at=now,
+        )
+
+    def _gate_refusal(self, task: AutomationTask, now: float) -> AutomationTask | None:
+        """The gate checks shared by :meth:`gate` and :meth:`execute`."""
+        state = self._targets.get((task.action, task.target))
+        if state is not None and state.last_run_at is not None:
+            if now - state.last_run_at < self._cooldown:
+                remaining = self._cooldown - (now - state.last_run_at)
+                return self._update(
+                    task,
+                    AutomationStatus.BLOCKED,
+                    message=f"Cooldown active for {task.action} {task.target} "
+                    f"({remaining:.0f} s remaining).",
+                )
+        executions = state.executions if state is not None else 0
+        if executions >= self._max_executions:
+            return self._update(
+                task,
+                AutomationStatus.BLOCKED,
+                message=(
+                    f"Loop protection: {task.action} {task.target} was "
+                    f"already executed {executions} times this session."
+                ),
+            )
+        return None
+
     def execute(self, task_id: str, now: float) -> AutomationTask | None:
         """Execute *task_id* when approved and safe; return the task.
 
@@ -214,26 +322,9 @@ class AutomationEngine:
                 AutomationStatus.FAILED,
                 message="No action executor is configured.",
             )
-        state = self._targets.get((task.action, task.target))
-        if state is not None and state.last_run_at is not None:
-            if now - state.last_run_at < self._cooldown:
-                remaining = self._cooldown - (now - state.last_run_at)
-                return self._update(
-                    task,
-                    AutomationStatus.BLOCKED,
-                    message=f"Cooldown active for {task.action} {task.target} "
-                    f"({remaining:.0f} s remaining).",
-                )
-        executions = state.executions if state is not None else 0
-        if executions >= self._max_executions:
-            return self._update(
-                task,
-                AutomationStatus.BLOCKED,
-                message=(
-                    f"Loop protection: {task.action} {task.target} was "
-                    f"already executed {executions} times this session."
-                ),
-            )
+        refusal = self._gate_refusal(task, now)
+        if refusal is not None:
+            return refusal
         self._update(task, AutomationStatus.RUNNING)
         try:
             result = self._executor(task.action, task.target)
@@ -243,22 +334,7 @@ class AutomationEngine:
                 AutomationStatus.FAILED,
                 message=f"Execution failed: {exc}",
             )
-        self._targets[(task.action, task.target)] = _TargetState(
-            last_run_at=now, executions=executions + 1
-        )
-        if result.success:
-            return self._update(
-                task,
-                AutomationStatus.SUCCEEDED,
-                message=result.message,
-                executed_at=now,
-            )
-        return self._update(
-            task,
-            AutomationStatus.FAILED,
-            message=result.message or "The action failed on the device.",
-            executed_at=now,
-        )
+        return self.record_result(task.task_id, result.success, now, result.message)
 
     # ------------------------------------------------------------------
     # Reading

@@ -27,7 +27,7 @@ from android_task_manager.health.models import (
     HealthSeverity,
     HealthStatus,
 )
-from android_task_manager.process.models import ProcessInfo, ProcessSnapshot
+from android_task_manager.process.models import ProcessCategory, ProcessInfo, ProcessSnapshot
 from android_task_manager.recommend import is_valid_package_name, recommend
 from android_task_manager.thresholds import CPU_HIGH_PERCENT, MEMORY_USED_HIGH_PERCENT
 
@@ -83,7 +83,7 @@ def _user_process(name: str, cpu: float, memory: float = 5.0, pid: int = 8150) -
         state="R",
         cpu_percent=cpu,
         memory_percent=memory,
-        category="user",
+        category=ProcessCategory.USER,
     )
 
 
@@ -160,14 +160,13 @@ def test_cpu_finding_targets_heavy_user_process() -> None:
 
 def test_cpu_finding_ignores_system_and_kernel_processes() -> None:
     health = _health_with(_finding(COMPONENT_CPU))
-    system = _user_process("system_server", CPU_HIGH_PERCENT)
     system = ProcessInfo(
         pid=1054, name="system_server", uid=1000, state="R",
-        cpu_percent=CPU_HIGH_PERCENT, memory_percent=1.0, category="system",
+        cpu_percent=CPU_HIGH_PERCENT, memory_percent=1.0, category=ProcessCategory.SYSTEM,
     )
     kernel = ProcessInfo(
         pid=17, name="kworker/0:1", uid=0, state="R",
-        cpu_percent=CPU_HIGH_PERCENT, memory_percent=1.0, category="kernel",
+        cpu_percent=CPU_HIGH_PERCENT, memory_percent=1.0, category=ProcessCategory.KERNEL_THREAD,
     )
     processes = ProcessSnapshot(timestamp=100.0, processes=[system, kernel])
     recs = recommend(health, processes)
@@ -178,7 +177,7 @@ def test_cpu_finding_skips_non_package_process_names() -> None:
     health = _health_with(_finding(COMPONENT_CPU))
     weird = ProcessInfo(
         pid=9999, name="ro.target; rm -rf /", uid=10001, state="R",
-        cpu_percent=CPU_HIGH_PERCENT, memory_percent=5.0, category="user",
+        cpu_percent=CPU_HIGH_PERCENT, memory_percent=5.0, category=ProcessCategory.USER,
     )
     processes = ProcessSnapshot(timestamp=100.0, processes=[weird])
     recs = recommend(health, processes)

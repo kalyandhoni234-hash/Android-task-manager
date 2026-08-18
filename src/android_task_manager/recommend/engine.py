@@ -28,7 +28,7 @@ from ..health.models import (
     Finding,
     HealthSeverity,
 )
-from ..process.models import ProcessSnapshot
+from ..process.models import ProcessCategory, ProcessSnapshot
 from ..thresholds import CPU_HIGH_PERCENT, MEMORY_USED_HIGH_PERCENT
 from .models import (
     RECOMMENDATION_SEVERITY_CRITICAL,
@@ -49,7 +49,7 @@ _SEVERITY_RANK = {
     RECOMMENDATION_SEVERITY_INFO: 2,
 }
 
-_PROCESS_CATEGORY_USER = "user"
+_PROCESS_CATEGORY_USER = ProcessCategory.USER
 
 
 def is_valid_package_name(name: str) -> bool:
