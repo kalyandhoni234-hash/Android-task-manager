@@ -230,7 +230,7 @@ def test_run_rejects_unknown_action() -> None:
     service = ActionService(runner)
     with pytest.raises(ActionError) as excinfo:
         service.run("delete_everything", "com.example.app")
-    assert excinfo.value.kind is ActionErrorKind.INVALID_PACKAGE
+    assert excinfo.value.kind is ActionErrorKind.INVALID_TARGET
     assert runner.calls == []
 
 
@@ -365,3 +365,129 @@ def test_resolved_component_is_never_fabricated() -> None:
     result = service.run("open_app", "com.example.app")
     assert result.success
     assert runner.calls[1] == ["am", "start", "-W", "-n", "com.other.thing/.Activity"]
+
+
+# ---------------------------------------------------------------------------
+# Enable / Disable
+# ---------------------------------------------------------------------------
+
+
+def test_enable_uses_pm_enable_shape() -> None:
+    runner = _FakeRunner({"pm enable com.example.app": "Package com.example.app new state: enabled\n"})
+    service = ActionService(runner)
+    result = service.run("enable", "com.example.app")
+    assert result.success
+    assert result.action == "enable"
+    assert result.message == "Enabled com.example.app"
+    assert result.target == "com.example.app"
+    assert runner.calls == [["pm", "enable", "com.example.app"]]
+
+
+def test_enable_permission_denied_is_typed() -> None:
+    runner = _FakeRunner(
+        {
+            "pm enable com.example.app": (
+                "java.lang.SecurityException: Not allowed to change package state\n"
+            )
+        }
+    )
+    service = ActionService(runner)
+    with pytest.raises(ActionError) as excinfo:
+        service.run("enable", "com.example.app")
+    assert excinfo.value.kind is ActionErrorKind.PERMISSION_DENIED
+    assert "could not be enabled" in excinfo.value.message
+
+
+def test_disable_uses_pm_disable_user_shape() -> None:
+    runner = _FakeRunner(
+        {
+            "pm disable-user --user 0 com.example.app": (
+                "Package com.example.app new state: disabled-user\n"
+            )
+        }
+    )
+    service = ActionService(runner)
+    result = service.run("disable", "com.example.app")
+    assert result.success
+    assert result.action == "disable"
+    assert result.message == "Disabled com.example.app"
+    assert runner.calls == [["pm", "disable-user", "--user", "0", "com.example.app"]]
+
+
+def test_disable_operation_not_allowed_is_typed() -> None:
+    runner = _FakeRunner(
+        {
+            "pm disable-user --user 0 com.example.app": (
+                "Error: Operation not allowed: java.lang.SecurityException: "
+                "Cannot disable package\n"
+            )
+        }
+    )
+    service = ActionService(runner)
+    with pytest.raises(ActionError) as excinfo:
+        service.run("disable", "com.example.app")
+    assert excinfo.value.kind is ActionErrorKind.PERMISSION_DENIED
+
+
+def test_disable_missing_package_is_not_found() -> None:
+    runner = _FakeRunner(
+        fails={
+            "pm disable-user --user 0 com.gone.app": ADBCommandError(
+                "pm disable-user --user 0 com.gone.app",
+                1,
+                stderr="Error: Package com.gone.app not found",
+            )
+        }
+    )
+    service = ActionService(runner)
+    with pytest.raises(ActionError) as excinfo:
+        service.run("disable", "com.gone.app")
+    assert excinfo.value.kind is ActionErrorKind.NOT_FOUND
+
+
+# ---------------------------------------------------------------------------
+# Uninstall
+# ---------------------------------------------------------------------------
+
+
+def test_uninstall_uses_pm_uninstall_shape() -> None:
+    runner = _FakeRunner({"pm uninstall com.example.app": "Success\n"})
+    service = ActionService(runner)
+    result = service.run("uninstall", "com.example.app")
+    assert result.success
+    assert result.action == "uninstall"
+    assert result.message == "Uninstalled com.example.app"
+    assert result.target == "com.example.app"
+    assert runner.calls == [["pm", "uninstall", "com.example.app"]]
+
+
+def test_uninstall_device_refusal_is_typed_failure() -> None:
+    runner = _FakeRunner(
+        {"pm uninstall com.example.app": "Failure [DELETE_FAILED_INTERNAL_ERROR]\n"}
+    )
+    service = ActionService(runner)
+    with pytest.raises(ActionError) as excinfo:
+        service.run("uninstall", "com.example.app")
+    assert excinfo.value.kind is ActionErrorKind.COMMAND_FAILED
+    assert "could not be uninstalled" in excinfo.value.message
+
+
+def test_uninstall_never_keeps_data() -> None:
+    # The command shape must not include -k: an uninstall must uninstall.
+    runner = _FakeRunner({"pm uninstall com.example.app": "Success\n"})
+    service = ActionService(runner)
+    service.run("uninstall", "com.example.app")
+    assert "-k" not in runner.calls[0]
+
+
+@pytest.mark.parametrize("payload", INJECTIONS)
+@pytest.mark.parametrize("action", ["enable", "disable", "uninstall"])
+def test_injection_payloads_never_reach_adb_for_new_actions(
+    payload: str, action: str
+) -> None:
+    runner = _FakeRunner()
+    service = ActionService(runner)
+    with pytest.raises(ActionError) as excinfo:
+        service.run(action, payload)
+    assert excinfo.value.kind is ActionErrorKind.INVALID_PACKAGE
+    assert runner.calls == []

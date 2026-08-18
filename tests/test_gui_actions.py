@@ -355,7 +355,7 @@ def test_worker_unknown_action_is_typed_failure(qtapp) -> None:
     worker.request_action("delete_everything", "com.heavy.app")
     assert len(results) == 1
     assert not results[0].success
-    assert results[0].error_kind is ActionErrorKind.INVALID_PACKAGE
+    assert results[0].error_kind is ActionErrorKind.INVALID_TARGET
 
 
 def test_worker_surprising_failure_never_crashes(qtapp, monkeypatch) -> None:
