@@ -14,6 +14,7 @@ from PySide6.QtCore import QObject, Signal, Slot
 from ..adb.connection import CommandRunner, ConnectionManager
 from ..adb.exceptions import ADBError
 from ..applications import ApplicationCollector
+from ..applications.apk_label import ApkLabelResolver
 from ..core.diagnostics import log_unexpected_failure
 from .monitor import ConnectionState
 
@@ -35,6 +36,15 @@ class AppsWorker(QObject):
     #: package that is no longer installed).
     details_failed = Signal(str, str)
 
+    #: (dict[package, label|None]) resolved human-readable labels for the
+    #: requested packages, or ``None`` when no label could be read from the
+    #: device APK. The caller falls back to the package name; never a guess.
+    labels_ready = Signal(object)
+
+    #: (list[package]) request label resolution for the named packages.
+    #: Queued onto this worker's thread so APK reads never block the GUI.
+    resolve_labels_requested = Signal(object)
+
     def __init__(
         self,
         connection: CommandRunner | None = None,
@@ -43,16 +53,20 @@ class AppsWorker(QObject):
         device_serial: str | None = None,
     ) -> None:
         super().__init__()
-        self._collector = ApplicationCollector(
-            connection
-            or ConnectionManager(
-                adb_path=adb_path,
-                timeout=timeout,
-                device_serial=device_serial,
-            ),
+        self._connection = connection or ConnectionManager(
+            adb_path=adb_path,
             timeout=timeout,
+            device_serial=device_serial,
         )
+        self._collector = ApplicationCollector(self._connection, timeout=timeout)
+        #: Resolves application labels from APKs on the connected device.
+        #: Cached per APK path; never fabricates a label.
+        self._label_resolver = ApkLabelResolver(self._connection, timeout=timeout)
+        #: Last successful inventory, retained so label resolution can map a
+        #: package to its APK path without re-collecting the inventory.
+        self._inventory: object | None = None
         self._busy = False
+        self.resolve_labels_requested.connect(self.resolve_labels)
 
     # ------------------------------------------------------------------
     # Test/status accessors
@@ -102,7 +116,38 @@ class AppsWorker(QObject):
             return
         finally:
             self._busy = False
+        self._inventory = snapshot
         self.inventory_ready.emit(snapshot)
+
+    @Slot(object)
+    def resolve_labels(self, packages: object) -> None:
+        """Resolve human-readable labels for *packages* from their APKs.
+
+        Each package's APK path comes from the most recent inventory; a
+        package with no inventory entry or no APK path maps to ``None``
+        (the GUI falls back to the package name). Any device/parse error
+        for a single package yields ``None`` for that package only — label
+        resolution is best-effort and never fabricated.
+        """
+        names = [str(p) for p in packages] if isinstance(packages, (list, tuple, set)) else []
+        result: dict[str, str | None] = {}
+        if self._inventory is None:
+            self.labels_ready.emit(result)
+            return
+        by_package = {app.package_name: app for app in self._inventory.applications}
+        for package in names:
+            info = by_package.get(package)
+            if info is None or not info.apk_path:
+                result[package] = None
+                continue
+            try:
+                result[package] = self._label_resolver.resolve(info.apk_path)
+            except ADBError:
+                result[package] = None
+            except Exception as exc:  # noqa: BLE001 - one bad APK must not sink the batch
+                log_unexpected_failure("apps", "label", exc)
+                result[package] = None
+        self.labels_ready.emit(result)
 
     @Slot(object)
     def request_details(self, package: object) -> None:

@@ -19,9 +19,15 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __version__
-from ..action.models import ActionResult
+from ..action import DISABLE, FORCE_STOP, UNINSTALL, ActionResult, supported_actions
 from ..applications import AppCategory, AppDetails, ApplicationSnapshot
 from ..automation import AutomationEngine, AutomationTask
+from ..background import (
+    BackgroundAppsSnapshot,
+    LastSeenTracker,
+    build_background_apps,
+)
+from ..background.models import ForegroundSnapshot
 from ..baseline import (
     BaselineSnapshot,
     BaselineStore,
@@ -363,6 +369,27 @@ class MainWindow(QMainWindow):
         self._automation = AutomationEngine()
         self._pending_automation_task: AutomationTask | None = None
         self._latest_app_snapshot: ApplicationSnapshot | None = None
+        #: The connected apps worker (set by wire_apps); ``None`` when the
+        #: window was not wired to one. Guarded before any label request.
+        self._apps: object | None = None
+        #: Most recent foreground (resumed-activity) signal from the device.
+        #: ``None`` until the monitor has sampled it (or the device was lost).
+        self._latest_foreground: ForegroundSnapshot | None = None
+        #: Resolved human-readable labels keyed by package name (device APK
+        #: reads, cached per session). Missing keys fall back to package name.
+        self._app_labels: dict[str, str | None] = {}
+        #: Packages for which a label resolution has already been requested
+        #: this session — prevents re-requesting (and re-reading APKs for)
+        #: labels that could not be resolved.
+        self._label_requested: set[str] = set()
+        #: Aggregated background-user-app view (rebuilt from the snapshots
+        #: the monitor + apps worker already publish; no extra polling).
+        self._background_apps: BackgroundAppsSnapshot | None = None
+        #: Bounded last-seen annotation for background entries; cleared on
+        #: every disconnect so no stale observation survives a reconnect.
+        self._last_seen_tracker = LastSeenTracker()
+        #: Package whose background-app details are currently being shown.
+        self._background_selected: str | None = None
         #: Verified installed-package set (process-to-app identity link for
         #: recommendations). Starts empty, never guessed: force-stop targets
         #: are only proposed for packages the device has verified installed.
@@ -408,6 +435,18 @@ class MainWindow(QMainWindow):
         self.intelligence = IntelligencePage()
         self.intelligence.apply_requested.connect(self._on_recommendation_applied)
         self.intelligence.navigate_requested.connect(self._on_intelligence_navigate)
+        self.intelligence.background_detail_requested.connect(
+            self._on_background_detail_requested
+        )
+        self.intelligence.background_action_requested.connect(
+            self._on_background_action_clicked
+        )
+        self.intelligence.background_permission_audit_requested.connect(
+            self.permission_audit_requested.emit
+        )
+        self.intelligence.background_refresh_requested.connect(
+            self._on_background_refresh
+        )
         self.device_page.export_requested.connect(self._on_device_report_export_requested)
 
         self._pages = QStackedWidget()
@@ -748,6 +787,7 @@ class MainWindow(QMainWindow):
                 timeline=self._timeline.events,
                 rule_fires=self._rule_fires,
                 automation_tasks=self._automation.tasks,
+                background_apps=self._background_apps,
             )
         )
 
@@ -791,6 +831,7 @@ class MainWindow(QMainWindow):
         self._record_metric_samples(self._latest_cpu.timestamp if self._latest_cpu else None)
         self._evaluate_diagnostics()
         self._evaluate_intelligence()
+        self._build_background_apps()
         self._refresh_overview()
         self._refresh_device_page()
 
@@ -826,6 +867,119 @@ class MainWindow(QMainWindow):
         self._refresh_overview()
         self._refresh_device_page()
 
+    def update_foreground(self, snapshot: ForegroundSnapshot | None) -> None:
+        """Adopt the device's current foreground-app signal and rebuild the
+        background-app view (the foreground app must be excluded from it)."""
+        self._latest_foreground = snapshot
+        self._build_background_apps()
+
+    # ------------------------------------------------------------------
+    # Background user-app aggregation (pure build over existing snapshots)
+    # ------------------------------------------------------------------
+
+    def _build_background_apps(self) -> None:
+        """Aggregate running processes into per-application background entries.
+
+        Consumes ONLY snapshots the monitor and apps worker already publish
+        (processes, memory, application inventory, foreground signal) plus the
+        device-resolved label map. It owns no timer and never talks to ADB — a
+        pure function over already-collected data, so it cannot introduce a
+        second polling loop.
+
+        When the device is disconnected (or telemetry is missing) the view is
+        cleared, never left showing stale applications or CPU/RAM values.
+        """
+        connected = self._connection_state is ConnectionState.CONNECTED
+        if (
+            not connected
+            or self._latest_processes is None
+            or self._latest_app_snapshot is None
+        ):
+            self._background_apps = None
+            if not connected:
+                self._app_labels = {}
+                self._label_requested = set()
+                self._last_seen_tracker.clear()
+                self._background_selected = None
+            self.intelligence.set_background_apps(None)
+            return
+
+        snapshot = build_background_apps(
+            self._latest_processes,
+            self._latest_app_snapshot,
+            self._latest_foreground,
+            self._latest_memory,
+            labels=self._app_labels,
+        )
+        snapshot = self._last_seen_tracker.annotate(snapshot, datetime.now())
+        self._background_apps = snapshot
+        self.intelligence.set_background_apps(snapshot)
+
+        # Request labels only for packages not yet resolved this session, so
+        # the one-off APK reads never repeat and never loop.
+        if self._apps is not None:
+            missing = [
+                entry.package_name
+                for entry in snapshot.entries
+                if entry.package_name not in self._app_labels
+                and entry.package_name not in self._label_requested
+            ]
+            if missing:
+                self._label_requested.update(missing)
+                self._apps.resolve_labels_requested.emit(missing)
+
+    def on_app_labels_ready(self, labels: object) -> None:
+        """Adopt resolved application labels and refresh the background view.
+
+        A label is only ever ``None`` (unresolved) — the GUI keeps showing the
+        package name for those; nothing is invented here.
+        """
+        if isinstance(labels, dict):
+            self._app_labels.update(labels)  # type: ignore[arg-type]
+        self._build_background_apps()
+
+    def _on_background_detail_requested(self, package: str) -> None:
+        """Track the selected background app and fetch its detail record."""
+        self._background_selected = package
+        self.apps_detail_requested.emit(package)
+
+    def _on_background_refresh(self) -> None:
+        """Rebuild the background view from the latest cached telemetry.
+
+        Label reads are not re-triggered for already-resolved packages (the
+        session cache holds), but the aggregation itself always re-runs so
+        fresh process/memory/foreground samples are reflected immediately.
+        """
+        self._build_background_apps()
+
+    def _on_background_action_clicked(self, action: str, package: str) -> None:
+        """Gate a background-app action through the v0.7 capability rules.
+
+        The gate is re-checked here (defense in depth): a system application
+        can never receive a destructive request, and force-stop / disable /
+        uninstall always require explicit confirmation naming the target.
+        """
+        if not package:
+            return
+        info = None
+        if self._latest_app_snapshot is not None:
+            info = next(
+                (a for a in self._latest_app_snapshot.applications if a.package_name == package),
+                None,
+            )
+        if info is None:
+            return
+        is_system = info.category is AppCategory.SYSTEM
+        available = supported_actions(is_system=is_system, enabled=info.enabled)
+        if action not in available:
+            return
+        if action in (FORCE_STOP, DISABLE, UNINSTALL) and not self._confirm_apps_action(
+            action, package, "Confirm Application Action?"
+        ):
+            return
+        self.intelligence.background_set_actions_busy(True)
+        self.action_requested.emit(action, package)
+
     def update_devices(self, devices: list[dict[str, str]]) -> None:
         """Fill the multi-device picker on the setup screen."""
         self.setup.set_devices(devices)
@@ -859,6 +1013,12 @@ class MainWindow(QMainWindow):
             self._latest_processes = None
             self._latest_network_investigation = None
             self._latest_app_snapshot = None
+            self._latest_foreground = None
+            self._app_labels = {}
+            self._label_requested = set()
+            self._background_apps = None
+            self._last_seen_tracker.clear()
+            self._background_selected = None
             self._verified_packages = set()
             self._user_packages = set()
             self._diagnostics_report = None
@@ -878,6 +1038,7 @@ class MainWindow(QMainWindow):
             )
             self.diagnostics_page.refresh(None, False)
             self.apps.clear()
+            self.intelligence.set_background_apps(None)
             self._stack.setCurrentIndex(0)
             self.setup.show_state(state, detail)
         self._refresh_intelligence()
@@ -976,6 +1137,8 @@ class MainWindow(QMainWindow):
         """Render the typed action outcome in the inspector panel."""
         self.processes.inspector.show_action_result(result)
         self.apps.show_action_result(result)
+        self.intelligence.background_action_result(result)
+        self.intelligence.background_set_actions_busy(False)
         if result.success and result.action in ("force_stop", "enable", "disable", "uninstall"):
             self.apps.set_actions_busy(False)
             if result.action in ("enable", "disable"):
@@ -1111,6 +1274,7 @@ class MainWindow(QMainWindow):
         }
         self.apps.set_snapshot(snapshot)
         self._evaluate_intelligence()
+        self._build_background_apps()
         self._refresh_overview()
 
     def on_apps_inventory_failed(self, message: str) -> None:
@@ -1120,6 +1284,8 @@ class MainWindow(QMainWindow):
     def on_apps_details_ready(self, details: AppDetails) -> None:
         """Render one application's detail record in the apps panel."""
         self.apps.show_details(details)
+        if self._background_selected is not None and details.package_name == self._background_selected:
+            self.intelligence.show_background_details(details)
 
     def on_apps_details_failed(self, package: str, message: str) -> None:
         """Render the honest detail failure state."""
@@ -1661,6 +1827,7 @@ def wire(window: MainWindow, worker: MonitorWorker) -> None:
     worker.connection_changed.connect(window.update_connection)
     worker.serial_ready.connect(window.on_serial_ready)
     worker.devices_available.connect(window.update_devices)
+    worker.foreground_snapshot.connect(window.update_foreground)
     window.closed.connect(worker.stop)
     window.overview.baseline_requested.connect(
         lambda: window._on_page_requested("baseline")
@@ -1718,8 +1885,12 @@ def wire_apps(window: MainWindow, monitor: MonitorWorker, apps, actions) -> None
     Inventory refresh requests run on the apps worker's thread (never the
     GUI); the action worker's installed-set refresh is triggered on the
     same requests so a successful uninstall/disable is reflected in the
-    process inspector's identity checks immediately.
+    process inspector's identity checks immediately. The apps worker also
+    resolves device-derived application labels (used by the background-app
+    view) without any extra polling loop. ``window._apps`` is retained so
+    the background builder can request label resolution on demand.
     """
+    window._apps = apps
     window.apps_refresh_requested.connect(apps.refresh_inventory)
     window.apps_refresh_requested.connect(actions.reload_packages)
     window.apps_detail_requested.connect(apps.request_details)
@@ -1727,6 +1898,7 @@ def wire_apps(window: MainWindow, monitor: MonitorWorker, apps, actions) -> None
     apps.inventory_failed.connect(window.on_apps_inventory_failed)
     apps.details_ready.connect(window.on_apps_details_ready)
     apps.details_failed.connect(window.on_apps_details_failed)
+    apps.labels_ready.connect(window.on_app_labels_ready)
     monitor.connection_changed.connect(apps.on_connection_changed)
 
 

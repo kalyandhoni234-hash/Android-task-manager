@@ -23,9 +23,11 @@ from PySide6.QtWidgets import (
 )
 
 from ..automation.models import AutomationTask
+from ..background.models import BackgroundAppsSnapshot
 from ..health.models import DeviceHealth
 from ..recommend.models import Recommendation
 from ..timeline.models import TimelineEvent
+from .widgets.background_apps_widget import BackgroundAppsWidget
 
 #: Maximum number of timeline rows rendered (the timeline itself is
 #: bounded; this caps the page rendering on top of it).
@@ -42,6 +44,9 @@ class IntelligenceState:
     timeline: tuple[TimelineEvent, ...] = ()
     rule_fires: tuple[str, ...] = ()
     automation_tasks: tuple[AutomationTask, ...] = ()
+    #: Aggregated per-application background view (PROCESS -> APPLICATION ->
+    #: user-app identity). ``None`` when no device / no data is available.
+    background_apps: BackgroundAppsSnapshot | None = None
 
 
 def _section(title: str) -> QLabel:
@@ -59,6 +64,18 @@ class IntelligencePage(QWidget):
 
     #: (str package name) the user asked to open the affected application.
     navigate_requested = Signal(str)
+
+    #: (str package name) the user selected a background app row.
+    background_detail_requested = Signal(str)
+
+    #: (action, package) the user clicked an action for a background app.
+    background_action_requested = Signal(str, str)
+
+    #: (str package name) the user asked to audit a background app's perms.
+    background_permission_audit_requested = Signal(str)
+
+    #: The user pressed Refresh on the BACKGROUND USER APPS section.
+    background_refresh_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -84,6 +101,29 @@ class IntelligencePage(QWidget):
         health_layout.addWidget(self._health_components)
         layout.addWidget(self._health_card)
 
+        # -- Background user apps -----------------------------------------
+        layout.addWidget(_section("BACKGROUND USER APPS"))
+        self._background_subtitle = QLabel(
+            "User applications currently running in the background"
+        )
+        self._background_subtitle.setObjectName("muted")
+        self._background_subtitle.setWordWrap(True)
+        layout.addWidget(self._background_subtitle)
+        self._background_widget = BackgroundAppsWidget()
+        self._background_widget.detail_requested.connect(
+            self.background_detail_requested.emit
+        )
+        self._background_widget.action_requested.connect(
+            self.background_action_requested.emit
+        )
+        self._background_widget.permission_audit_requested.connect(
+            self.background_permission_audit_requested.emit
+        )
+        self._background_widget.refresh_requested.connect(
+            self.background_refresh_requested.emit
+        )
+        layout.addWidget(self._background_widget)
+
         # -- Recommendations ----------------------------------------------
         layout.addWidget(_section("RECOMMENDATIONS"))
         self._recommendations_area = QScrollArea()
@@ -105,6 +145,7 @@ class IntelligencePage(QWidget):
         layout.addWidget(_section("TIMELINE"))
         self._timeline_label = QLabel()
         self._timeline_label.setObjectName("timelineText")
+        self._timeline_label.setTextFormat(Qt.TextFormat.PlainText)
         self._timeline_label.setWordWrap(True)
         self._timeline_label.setAlignment(Qt.AlignmentFlag.AlignTop)
         layout.addWidget(self._timeline_label)
@@ -135,10 +176,34 @@ class IntelligencePage(QWidget):
     def refresh(self, state: IntelligenceState) -> None:
         """Render a snapshot of the intelligence engines' outputs."""
         self._render_health(state.health, state.connected)
+        self._render_background(state.background_apps)
         self._render_recommendations(state.recommendations)
         self._render_timeline(state.timeline)
         self._render_rules(state.rule_fires)
         self._render_automation(state.automation_tasks)
+
+    # ------------------------------------------------------------------
+    # Background user apps
+    # ------------------------------------------------------------------
+
+    def set_background_apps(self, snapshot: BackgroundAppsSnapshot | None) -> None:
+        """Replace the BACKGROUND USER APPS table contents."""
+        self._background_widget.set_snapshot(snapshot)
+
+    def _render_background(self, snapshot: BackgroundAppsSnapshot | None) -> None:
+        self._background_widget.set_snapshot(snapshot)
+
+    def show_background_details(self, details) -> None:
+        """Render a fetched AppDetails record in the background detail panel."""
+        self._background_widget.show_details(details)
+
+    def background_action_result(self, result) -> None:
+        """Render the typed outcome of a background-app action."""
+        self._background_widget.show_action_result(result)
+
+    def background_set_actions_busy(self, busy: bool) -> None:
+        """Lock the background detail panel's action buttons during an action."""
+        self._background_widget.set_actions_busy(busy)
 
     def _render_health(self, health: DeviceHealth | None, connected: bool) -> None:
         if not connected or health is None:

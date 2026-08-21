@@ -28,6 +28,7 @@ from ..adb.exceptions import (
     ADBTimeoutError,
     ADBUnauthorizedError,
 )
+from ..background.collector import ForegroundCollector
 from ..battery.collector import BatteryCollector
 from ..core.diagnostics import log_unexpected_failure
 from ..cpu.collector import CPUCollector
@@ -91,6 +92,10 @@ class MonitorWorker(QObject):
     #: (NetworkInvestigationSnapshot) — the socket-level view from the
     #: investigation collector; published on its own slower cadence.
     network_investigation = Signal(object)
+    #: (ForegroundSnapshot | None) — the device's currently resumed
+    #: (foreground) application package, sampled on the process cadence.
+    #: ``None`` means "unavailable / not sampled yet".
+    foreground_snapshot = Signal(object)
     #: (StorageSnapshot | None) — the live internal-storage snapshot from
     #: the storage collector; published on its own slow cadence (``df -k``
     #: is cheap but the value changes slowly). None means "unavailable".
@@ -143,6 +148,10 @@ class MonitorWorker(QObject):
         self._network_investigation_collector = NetworkInvestigationCollector(self._connection)
         self._device_info_collector = DeviceInfoCollector(self._connection)
         self._storage_collector = StorageCollector(self._connection)
+        #: Foreground-app sampler — reuses the single ADB facade; one small
+        #: ``dumpsys activity activities`` read per process interval. It does
+        #: NOT create a new polling loop (extends the existing timer only).
+        self._foreground_collector = ForegroundCollector(self._connection, timeout=timeout)
 
         self._cpu_interval = cpu_interval
         self._memory_interval = memory_interval
@@ -162,12 +171,14 @@ class MonitorWorker(QObject):
         self._network: object | None = None
         self._network_investigation: object | None = None
         self._storage: object | None = None
+        self._foreground: object | None = None
         self._last_memory_at = 0.0
         self._last_process_at = 0.0
         self._last_battery_at = 0.0
         self._last_network_at = 0.0
         self._last_network_investigation_at = 0.0
         self._last_storage_at = 0.0
+        self._last_foreground_at = 0.0
 
     # ------------------------------------------------------------------
     # Lifecycle / loop
@@ -278,12 +289,14 @@ class MonitorWorker(QObject):
         self._network = None
         self._network_investigation = None
         self._storage = None
+        self._foreground = None
         self._last_memory_at = 0.0
         self._last_process_at = 0.0
         self._last_battery_at = 0.0
         self._last_network_at = 0.0
         self._last_network_investigation_at = 0.0
         self._last_storage_at = 0.0
+        self._last_foreground_at = 0.0
 
     def _report_devices(self) -> None:
         """Enumerate attached devices (best-effort) for the selection UI."""
@@ -397,6 +410,9 @@ class MonitorWorker(QObject):
         if self._processes is None or (now - self._last_process_at) >= self._process_interval:
             collect("process", self._process_collector.sample, "_processes")
             self._last_process_at = time.monotonic()
+        if self._foreground is None or (now - self._last_foreground_at) >= self._process_interval:
+            collect("foreground", self._foreground_collector.sample, "_foreground")
+            self._last_foreground_at = time.monotonic()
         if self._battery is None or (now - self._last_battery_at) >= self._battery_interval:
             collect("battery", self._battery_collector.sample, "_battery")
             self._last_battery_at = time.monotonic()
@@ -429,6 +445,7 @@ class MonitorWorker(QObject):
                 self._invalidate_snapshots()
                 self._connected = False
                 self.snapshots.emit(None, None, None, None, None)
+                self.foreground_snapshot.emit(None)
                 return
         else:
             self.connection_changed.emit(ConnectionState.CONNECTED, "")
@@ -438,3 +455,5 @@ class MonitorWorker(QObject):
             self.network_investigation.emit(self._network_investigation)
         if self._storage is not None:
             self.storage_snapshot.emit(self._storage)
+        if self._foreground is not None:
+            self.foreground_snapshot.emit(self._foreground)

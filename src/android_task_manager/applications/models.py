@@ -43,6 +43,10 @@ class AppInfo:
     category: AppCategory = AppCategory.UNKNOWN
     #: ``False`` when the package is reported disabled by ``pm``.
     enabled: bool | None = None
+    #: Human-readable application label resolved from the device's APK (the
+    #: authoritative name shown to the user). ``None`` means "not resolved"
+    #: and the GUI falls back to the package name — never an invented label.
+    label: str | None = None
 
 
 @dataclass(frozen=True)
