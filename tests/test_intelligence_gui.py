@@ -361,7 +361,7 @@ def _wire_automation(window: MainWindow, monkeypatch) -> None:
     emitted: list[tuple[str, str]] = []
     window.action_requested.connect(lambda a, p: emitted.append((a, p)))
     monkeypatch.setattr(
-        "android_task_manager.gui.main_window.QMessageBox.information",
+        "android_task_manager.gui.main_window._show_information",
         lambda *args, **kwargs: None,
     )
     return emitted
@@ -418,7 +418,7 @@ def test_automation_path_blocked_when_cooldown_active(qtapp, monkeypatch) -> Non
     emitted = _wire_automation(window, monkeypatch)
     infos: list[str] = []
     monkeypatch.setattr(
-        "android_task_manager.gui.main_window.QMessageBox.information",
+        "android_task_manager.gui.main_window._show_information",
         lambda *args, **kwargs: infos.append(str(args[-1])),
     )
     window._recommendations = (_automation_ready_recommendation(),)

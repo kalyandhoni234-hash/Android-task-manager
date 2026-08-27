@@ -25,8 +25,10 @@ from PySide6.QtWidgets import (
 from ..automation.models import AutomationTask
 from ..background.models import BackgroundAppsSnapshot
 from ..health.models import DeviceHealth
+from ..performance.view import PerformanceViewState
 from ..recommend.models import Recommendation
 from ..timeline.models import TimelineEvent
+from .performance_page import PerformanceSummaryWidget
 from .widgets.background_apps_widget import BackgroundAppsWidget
 
 #: Maximum number of timeline rows rendered (the timeline itself is
@@ -77,6 +79,9 @@ class IntelligencePage(QWidget):
     #: The user pressed Refresh on the BACKGROUND USER APPS section.
     background_refresh_requested = Signal()
 
+    #: The user asked to open the full Performance Intelligence page.
+    performance_requested = Signal()
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("intelligencePage")
@@ -100,6 +105,22 @@ class IntelligencePage(QWidget):
         self._health_components.setWordWrap(True)
         health_layout.addWidget(self._health_components)
         layout.addWidget(self._health_card)
+
+        # -- Performance intelligence (Phase 3) ---------------------------
+        layout.addWidget(_section("PERFORMANCE INTELLIGENCE"))
+        self._perf_summary = PerformanceSummaryWidget()
+        self._perf_summary.view_full_requested.connect(
+            self.performance_requested.emit
+        )
+        layout.addWidget(self._perf_summary)
+
+        # -- Latest performance episode (Phase 5) --------------------------
+        layout.addWidget(_section("LATEST PERFORMANCE EPISODE"))
+        self._perf_episode = QLabel()
+        self._perf_episode.setObjectName("perfEpisodeSummary")
+        self._perf_episode.setWordWrap(True)
+        self._perf_episode.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self._perf_episode)
 
         # -- Background user apps -----------------------------------------
         layout.addWidget(_section("BACKGROUND USER APPS"))
@@ -189,6 +210,35 @@ class IntelligencePage(QWidget):
     def set_background_apps(self, snapshot: BackgroundAppsSnapshot | None) -> None:
         """Replace the BACKGROUND USER APPS table contents."""
         self._background_widget.set_snapshot(snapshot)
+
+    def refresh_performance(self, state: PerformanceViewState, connected: bool) -> None:
+        """Render the compact Performance Intelligence summary (Phase 3/5)."""
+        self._perf_summary.refresh(state, connected)
+        self._render_latest_episode(state, connected)
+
+    def _render_latest_episode(self, state: PerformanceViewState, connected: bool) -> None:
+        if not connected:
+            self._perf_episode.setText("—")
+            return
+        ep = state.current_episode
+        s = state.investigation_summary
+        if ep is None or s is None:
+            self._perf_episode.setText("No performance episode recorded yet.")
+            return
+        lines = [
+            f"{s.condition}  ·  {s.status}",
+            f"Peak: {s.peak:.1f}%" if s.peak is not None else "Peak: —",
+            f"Duration: {s.duration_text}",
+            f"Baseline: {s.baseline:.1f}%" if s.baseline is not None else "Baseline: —",
+        ]
+        if s.historical is not None and s.historical.interpretation:
+            lines.append(s.historical.interpretation)
+        if s.top_contributor is not None and s.top_contributor.times_top > 0:
+            name = s.top_contributor.label or s.top_contributor.package
+            lines.append(f"Top observed contributor: {name}")
+        if s.recommendation:
+            lines.append(f"Investigate: {s.recommendation}")
+        self._perf_episode.setText("\n".join(lines))
 
     def _render_background(self, snapshot: BackgroundAppsSnapshot | None) -> None:
         self._background_widget.set_snapshot(snapshot)

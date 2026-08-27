@@ -356,6 +356,11 @@ QWidget#diagCardInfo {
     border-left: 3px solid #3d9be9;
     border-radius: 8px;
 }
+QWidget#evidenceRow {
+    background-color: #1a2027;
+    border: 1px solid #2a323c;
+    border-radius: 6px;
+}
 QLabel#diagField {
     color: #7a8794;
     font-size: 11px;
@@ -370,5 +375,143 @@ QLabel#findingRule {
 }
 QLabel#findingReason {
     color: #aab4c0;
+}
+
+/* --- Performance Intelligence (Phase 3) --- */
+QLabel#perfStateBadge {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    background-color: #1a2027;
+    border: 1px solid #2a323c;
+}
+QLabel#perfStateBadge[level="high"] {
+    color: #ff6b6b;
+    border-color: #5a2a2a;
+}
+QLabel#perfStateBadge[level="elevated"] {
+    color: #ffba49;
+    border-color: #5a4a2a;
+}
+QLabel#perfStateBadge[level="info"] {
+    color: #5ad19a;
+    border-color: #2a5a45;
+}
+QLabel#perfStateBadge[level="muted"] {
+    color: #7a8794;
+}
+QLabel#perfScoreBadge {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 5px 12px;
+    border-radius: 6px;
+    background-color: #1a2027;
+    border: 1px solid #2a323c;
+}
+QLabel#perfScoreBadge[level="high"] {
+    color: #ff6b6b;
+    border-color: #5a2a2a;
+}
+QLabel#perfScoreBadge[level="elevated"] {
+    color: #ffba49;
+    border-color: #5a4a2a;
+}
+QLabel#perfScoreBadge[level="info"] {
+    color: #5ad19a;
+    border-color: #2a5a45;
+}
+QLabel#perfScoreBadge[level="muted"] {
+    color: #7a8794;
+}
+QWidget#perfExplanationCard {
+    background-color: #161c23;
+    border: 1px solid #2a323c;
+    border-radius: 6px;
+}
+QLabel#perfWhyTitle {
+    color: #ffffff;
+    font-weight: 700;
+    font-size: 13px;
+}
+QLabel#whySectionTitle {
+    color: #7a8794;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+}
+QWidget#perfEpisodeCard {
+    background-color: #161c23;
+    border: 1px solid #2a323c;
+    border-radius: 6px;
+}
+QLabel#perfEpisodeSummary {
+    color: #d8dee6;
+    font-size: 12px;
+}
+QFrame#perfMetricCard {
+    background-color: #1a2027;
+    border: 1px solid #2a323c;
+    border-radius: 6px;
+}
+QLabel#perfMetricLabel {
+    color: #d8dee6;
+    font-weight: 600;
+    font-size: 12px;
+}
+QLabel#perfMetricValue {
+    color: #ffffff;
+    font-weight: 700;
+    font-size: 22px;
+    font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+}
+QLabel#perfMetricBaseline {
+    color: #aab4c0;
+    font-size: 11px;
+}
+QLabel#perfMetricOcc {
+    color: #7a8794;
+    font-size: 11px;
+}
+QLabel#perfMetricEvidence {
+    color: #aab4c0;
+    font-size: 11px;
+}
+QLabel#evidenceGroupTitle {
+    color: #7a8794;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    margin-top: 4px;
+}
+QWidget#evidenceRow {
+    background-color: #161b21;
+    border: 1px solid #222a32;
+    border-radius: 5px;
+}
+QWidget#perfSummary {
+    background-color: #161b21;
+    border: 1px solid #2a323c;
+    border-radius: 8px;
+    padding: 10px;
+}
+QLabel#perfSummaryMetrics {
+    color: #d8dee6;
+    font-size: 12px;
+    font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+}
+QPushButton#perfTimelineButton {
+    color: #5ad19a;
+    background-color: transparent;
+    border: 1px solid #2a5a45;
+    border-radius: 5px;
+    padding: 5px 10px;
+    font-size: 11px;
+    font-weight: 600;
+}
+QPushButton#perfTimelineButton:hover {
+    background-color: #1c2a33;
 }
 """

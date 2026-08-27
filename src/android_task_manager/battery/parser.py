@@ -68,8 +68,12 @@ def parse_battery_output(text: str, timestamp: float = 0.0) -> BatterySnapshot:
     present = _parse_bool(fields["present"], "present")
     level = _parse_int(fields["level"], "level")
     scale = _parse_int(fields["scale"], "scale")
-    voltage_mv = _parse_int(fields["voltage"], "voltage")
-    temperature_raw = _parse_int(fields["temperature"], "temperature")
+    voltage_mv = _parse_int_range(
+        fields["voltage"], "voltage", 2500, 6000, unit="mV"
+    )
+    temperature_raw = _parse_int_range(
+        fields["temperature"], "temperature", -300, 800, unit="0.1°C"
+    )
 
     return BatterySnapshot(
         timestamp=timestamp,
@@ -98,6 +102,23 @@ def _parse_int(value: str, field: str) -> int:
         raise BatteryParseError(
             f"Field {field!r} has invalid integer value {value!r}."
         ) from exc
+
+
+def _parse_int_range(
+    value: str, field: str, lo: int, hi: int, *, unit: str = ""
+) -> int:
+    """Parse an integer and reject values outside [lo, hi].
+
+    Physical/domain justification for the range is documented at each
+    call site.  ``unit`` is included in the error message for clarity.
+    """
+    raw = _parse_int(value, field)
+    if raw < lo or raw > hi:
+        msg = f"Field {field!r} value {raw} is outside plausible range [{lo}, {hi}]"
+        if unit:
+            msg += f" {unit}"
+        raise BatteryParseError(msg)
+    return raw
 
 
 def _parse_bool(value: str, field: str) -> bool:

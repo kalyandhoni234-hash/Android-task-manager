@@ -20,6 +20,9 @@ from urllib.request import Request, urlopen
 
 from .models import UpdateCheckResult
 
+#: Allowed URL schemes for release links — anything else is rejected.
+_ALLOWED_SCHEMES = frozenset({"http", "https"})
+
 #: GitHub API endpoint for the newest published release of this repository.
 _RELEASES_LATEST_URL = (
     "https://api.github.com/repos/kalyandhoni234-hash/Android-task-manager/releases/latest"
@@ -89,6 +92,16 @@ def fetch_latest_release_tag(timeout_seconds: float = 5.0) -> tuple[str | None, 
         if not isinstance(tag, str) or not tag:
             return None, None
         if not isinstance(url, str) or not url:
+            return None, None
+        # Reject non-http(s) URLs — a compromised API response must not
+        # cause javascript:/file:/data: URLs to be opened.
+        from urllib.parse import urlparse
+
+        try:
+            scheme = urlparse(url).scheme.lower()
+        except ValueError:
+            return None, None
+        if scheme not in _ALLOWED_SCHEMES:
             return None, None
         return tag, url
     except Exception:  # noqa: BLE001 - every network/parsing failure is silent

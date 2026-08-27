@@ -131,6 +131,8 @@ class ProcessInspectorWidget(QWidget):
 
         title_row = QHBoxLayout()
         self._title = QLabel("")
+        # Process names are device-controlled: render strictly literally.
+        self._title.setTextFormat(Qt.TextFormat.PlainText)
         self._title.setObjectName("value")
         title_row.addWidget(self._title, 1)
         self._hide = QPushButton("Hide")
@@ -142,6 +144,7 @@ class ProcessInspectorWidget(QWidget):
         layout.addLayout(title_row)
 
         self._subtitle = QLabel("")
+        self._subtitle.setTextFormat(Qt.TextFormat.PlainText)
         self._subtitle.setObjectName("muted")
         layout.addWidget(self._subtitle)
 
@@ -162,6 +165,7 @@ class ProcessInspectorWidget(QWidget):
         layout.addLayout(grid)
 
         self._command_line = QLabel("")
+        self._command_line.setTextFormat(Qt.TextFormat.PlainText)
         self._command_line.setObjectName("caption")
         self._command_line.setWordWrap(True)
         self._command_line.hide()
@@ -188,6 +192,7 @@ class ProcessInspectorWidget(QWidget):
         self._stop_btn.clicked.connect(lambda: self._on_action_clicked("force_stop"))
         self._manage_btn.clicked.connect(self._on_manage_clicked)
         self._status = QLabel("")
+        self._status.setTextFormat(Qt.TextFormat.PlainText)
         self._status.setObjectName("muted")
         self._status.setWordWrap(True)
         action_row.addWidget(self._status, 1)

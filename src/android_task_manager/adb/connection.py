@@ -96,6 +96,25 @@ class ConnectionManager:
         """Pin (or unpin) the target device by serial."""
         self._device_serial = device_serial
 
+    @property
+    def bound_serial(self) -> str | None:
+        """The session-bound device serial, if one is pinned.
+
+        While bound, every command resolves against exactly this serial:
+        a vanished or replaced device is typed device loss, never a silent
+        fallback to whatever else adb can see.
+        """
+        return self._device_serial
+
+    def release_serial_binding(self) -> None:
+        """Drop the session binding after device loss.
+
+        Called when the bound device is gone so the connection loop can
+        rediscover what is attached; the next discovered device is adopted
+        as a NEW session identity (never a mutation of the old one).
+        """
+        self._device_serial = None
+
     # ------------------------------------------------------------------
     # Availability / discovery
     # ------------------------------------------------------------------

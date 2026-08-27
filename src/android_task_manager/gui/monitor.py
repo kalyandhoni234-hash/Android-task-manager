@@ -241,6 +241,13 @@ class MonitorWorker(QObject):
             release = self._connection.shell(["getprop", "ro.build.version.release"]).strip()
             if self._stopped:
                 return
+            # Bind this session to the discovered serial: every later command
+            # (telemetry, baselines, actions, ...) resolves against exactly
+            # this device, and its absence is device loss — never a silent
+            # fallback to another attached phone.
+            binder = getattr(self._connection, "set_device_serial", None)
+            if binder is not None:
+                binder(serial)
             label = f"{manufacturer} {model}".strip() or serial
             self.device_info.emit(label, release or "Unknown")
             # One structured identity snapshot per connection session; the
@@ -272,8 +279,18 @@ class MonitorWorker(QObject):
         """Record a failed connect: log it, drop stale telemetry, emit."""
         logger.warning("connection failed (%s): %s", state.value, exc)
         self._connected = False
+        if state in _DEVICE_LOSS_STATES:
+            # The bound device is gone: release the session serial so the
+            # retry loop rediscovers what is attached (a replacement device
+            # then becomes a fresh session, not a mutation of the old one).
+            self._release_serial_binding()
         self._invalidate_snapshots()
         self.connection_changed.emit(state, str(exc))
+
+    def _release_serial_binding(self) -> None:
+        releaser = getattr(self._connection, "release_serial_binding", None)
+        if releaser is not None:
+            releaser()
 
     def _invalidate_snapshots(self) -> None:
         """Drop every cached telemetry snapshot.
@@ -437,11 +454,13 @@ class MonitorWorker(QObject):
             if state in _DEVICE_LOSS_STATES:
                 # The device is gone: drop every cached snapshot (telemetry
                 # from the old session must never be presented as current),
-                # publish an unambiguous empty snapshot, and let run()'s loop
-                # re-establish the connection from scratch.
+                # release the serial binding (a replacement device becomes a
+                # fresh session), publish an unambiguous empty snapshot, and
+                # let run()'s loop re-establish the connection from scratch.
                 logger.warning(
                     "device lost while sampling (%s): %s", state.value, "; ".join(errors)
                 )
+                self._release_serial_binding()
                 self._invalidate_snapshots()
                 self._connected = False
                 self.snapshots.emit(None, None, None, None, None)

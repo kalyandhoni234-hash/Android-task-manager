@@ -6,7 +6,7 @@ signals. It never talks to adb itself — that stays in ``MonitorWorker``.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -69,6 +69,8 @@ class SetupPanel(QWidget):
         self._title.setAlignment(self._title.alignment().AlignHCenter)
 
         self._message = QLabel()
+        # `detail` can echo raw adb/device text: render it strictly literal.
+        self._message.setTextFormat(Qt.TextFormat.PlainText)
         self._message.setObjectName("muted")
         self._message.setWordWrap(True)
         self._message.setAlignment(self._message.alignment().AlignHCenter)

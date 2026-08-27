@@ -4,6 +4,12 @@ on:
   push:
   pull_request:
 
+# Least-privilege baseline: CI only reads code and reports results. No job
+# here publishes anything, so the GITHUB_TOKEN gets read-only access to the
+# repository contents.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
@@ -19,9 +25,9 @@ jobs:
       QT_QPA_PLATFORM: offscreen
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -39,7 +45,7 @@ jobs:
       - name: Install project (core, dev, and GUI extras)
         run: |
           python -m pip install --upgrade pip
-          pip install ".[dev,gui]"
+          pip install -c packaging/windows-build-constraints.txt ".[dev,gui]"
 
       - name: Run test suite (headless)
         run: python -m pytest -v
@@ -51,9 +57,9 @@ jobs:
     name: Lint (Ruff)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -69,9 +75,9 @@ jobs:
     name: Type check (Mypy)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # actions/setup-python@v5
         with:
           python-version: "3.12"
 
@@ -106,16 +112,16 @@ jobs:
     name: Dependency audit (pip-audit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Install project + audit tooling
         run: |
           python -m pip install --upgrade pip
-          pip install ".[dev,gui]"
+          pip install -c packaging/windows-build-constraints.txt ".[dev,gui]"
 
       - name: Audit dependencies
         run: python -m pip_audit
@@ -127,9 +133,9 @@ jobs:
       run:
         working-directory: android-task-manager-website/website
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
         with:
           node-version: 22
           cache: npm

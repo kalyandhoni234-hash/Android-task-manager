@@ -29,7 +29,8 @@ class StorageSnapshot:
 
     @property
     def used_percent(self) -> float | None:
-        """Used share of total, or None when total is not positive."""
+        """Used share of total, clamped to [0, 100]; None when total is not positive."""
         if self.total_kb <= 0:
             return None
-        return self.used_kb / self.total_kb * 100
+        pct = self.used_kb / self.total_kb * 100
+        return min(100.0, max(0.0, pct))

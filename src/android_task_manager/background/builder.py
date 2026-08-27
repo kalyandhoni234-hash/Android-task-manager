@@ -3,10 +3,11 @@
 Pure aggregation over snapshots the monitor already published:
 
 * only processes classified USER (uid >= AID_APP) are eligible;
-* every eligible process must resolve to a package in the authoritative
-  installed-application inventory (UID relationship first, then exact /
-  boundary-prefixed process-name match) — unresolved processes are
-  dropped, never guessed;
+* every eligible process must resolve via UID relationship to a package
+  in the authoritative installed-application inventory (UID-or-Unknown:
+  exact / `<package>:suffix` disambiguation inside the UID group;
+  no process-name fallback) — unresolved processes are dropped, never
+  guessed;
 * packages whose inventory category is not explicitly USER (system,
   protected, unknown) are excluded entirely;
 * the currently foreground application is excluded from the background
@@ -32,63 +33,50 @@ from .models import (
 )
 
 
-def _name_matches_process(package: str, process_name: str) -> bool:
-    """True when *process_name* belongs to *package* by Android naming.
+def _uid_group_matches(package: str, process_name: str) -> bool:
+    """True when *process_name* is a valid Android shape for *package*.
 
-    Android names app processes exactly ``<package>`` or ``<package>:<suffix>``
-    (service/ push/ isolated-process suffixes). The boundary check keeps
-    ``com.example`` from matching ``com.example2``.
+    Android names app processes exactly ``<package>`` or
+    ``<package>:<suffix>`` (service/push/isolated-process suffixes). There is
+    deliberately NO ``package + "."`` rule: ``com.foo.application`` is a
+    *different package*, never an extension of ``com.foo``.
     """
-    return (
-        process_name == package
-        or process_name.startswith(package + ":")
-        or process_name.startswith(package + ".")
-    )
+    return process_name == package or process_name.startswith(package + ":")
 
 
 def _resolve_owner(
     process: ProcessInfo,
     by_uid: dict[int, list[AppInfo]],
-    user_apps: list[AppInfo],
 ) -> AppInfo | None:
     """Resolve one process to its owning installed application.
 
-    Order of evidence (documented, deterministic):
+    UID-or-Unknown (hardened contract): ownership requires a UID-backed
+    candidate — an installed user package whose UID equals the process UID.
+    Within equal UIDs (sharedUserId) disambiguation is deterministic:
+    exact process name, then ``<package>:suffix``, then the alphabetically
+    first candidate (shared-user packages are indistinguishable from
+    process data alone, and the choice must never depend on dict order).
 
-    1. UID relationship — packages installed under the process' UID.
-       Within equal UIDs (sharedUserId), an exact/prefixed name match
-       disambiguates; otherwise the alphabetically first candidate wins
-       (shared-user packages are indistinguishable from process data
-       alone, and the choice must never depend on dict order).
-    2. Name relationship across all user packages — exact name, then
-       boundary-prefixed names, alphabetical among equals.
-    3. ``None`` — no verified owner; the process is dropped.
+    When no UID-backed candidate exists the owner is ``None`` and the
+    process is dropped — it is NEVER attributed merely because its name
+    matches an installed package.
     """
-    candidates: list[AppInfo] | None = None
-    if process.uid is not None:
-        candidates = by_uid.get(process.uid)
-    if candidates:
-        exact = [a for a in candidates if a.package_name == process.name]
-        if exact:
-            return exact[0]
-        prefixed = sorted(
-            (a for a in candidates if _name_matches_process(a.package_name, process.name)),
-            key=lambda a: a.package_name,
-        )
-        if prefixed:
-            return prefixed[0]
-        return sorted(candidates, key=lambda a: a.package_name)[0]
+    if process.uid is None:
+        return None
+    candidates = by_uid.get(process.uid)
+    if not candidates:
+        return None
 
-    exact = [a for a in user_apps if a.package_name == process.name]
+    exact = [a for a in candidates if a.package_name == process.name]
     if exact:
         return exact[0]
     prefixed = sorted(
-        (a for a in user_apps if _name_matches_process(a.package_name, process.name)),
+        (a for a in candidates if _uid_group_matches(a.package_name, process.name)),
         key=lambda a: a.package_name,
     )
     if prefixed:
         return prefixed[0]
-    return None
+    return sorted(candidates, key=lambda a: a.package_name)[0]
 
 
 def _sum(values: list[float | None]) -> float | None:
@@ -145,7 +133,7 @@ def build_background_apps(
             continue  # kernel threads never appear here
         if process.uid is not None and process.uid < _AID_APP:
             continue  # system/service UIDs are excluded even on name collisions
-        owner = _resolve_owner(process, by_uid, user_apps)
+        owner = _resolve_owner(process, by_uid)
         if owner is None:
             continue  # unverified identity: dropped, never guessed
         if owner.package_name == foreground_package:

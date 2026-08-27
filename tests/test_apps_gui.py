@@ -26,6 +26,7 @@ from android_task_manager.applications import (
     AppInfo,
     ApplicationSnapshot,
 )
+from android_task_manager.gui import main_window as mw_main
 from android_task_manager.gui.action_worker import ActionWorker
 from android_task_manager.gui.apps_page import ApplicationsPage
 from android_task_manager.gui.apps_worker import AppsWorker
@@ -452,9 +453,8 @@ def test_window_apps_action_confirmations(qtapp, monkeypatch) -> None:
 
     # Canceled destructive action never dispatches.
     monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Cancel),
+        "android_task_manager.gui.main_window._ask_confirmation",
+        staticmethod(lambda *a, **k: False),
     )
     window.apps.details._on_action_clicked("uninstall")
     assert confirmed == []
@@ -464,9 +464,8 @@ def test_window_apps_action_confirmations(qtapp, monkeypatch) -> None:
 
     # Confirmed destructive action dispatches exactly once.
     monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes),
+        "android_task_manager.gui.main_window._ask_confirmation",
+        staticmethod(lambda *a, **k: True),
     )
     window.apps.details._on_action_clicked("uninstall")
     assert confirmed == ["uninstall"]
@@ -481,9 +480,8 @@ def test_window_system_app_action_rejected_at_window_gate(qtapp, monkeypatch) ->
         _details("com.android.settings", category=AppCategory.SYSTEM)
     )
     monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes),
+        "android_task_manager.gui.main_window._ask_confirmation",
+        staticmethod(lambda *a, **k: True),
     )
     confirmed: list[str] = []
     window.action_requested.connect(lambda a, p: confirmed.append(a))
@@ -500,13 +498,18 @@ def test_window_force_stop_confirmation_names_package(qtapp, monkeypatch) -> Non
     _show_dashboard(window)
     window.apps.details.set_details(_details("com.example.app"))
     seen: list[str] = []
-    monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        staticmethod(
-            lambda parent, title, message, *a, **k: seen.append(message) or QMessageBox.StandardButton.Cancel
-        ),
-    )
+
+    def capture_builder(parent, title, message):
+        seen.append(message)
+        import types
+
+
+        return types.SimpleNamespace(
+            text=message,
+            exec=lambda: QMessageBox.StandardButton.Cancel,
+        )
+
+    monkeypatch.setattr(mw_main, "_build_confirmation", capture_builder)
     window.apps.details._on_action_clicked("force_stop")
     assert seen and "com.example.app" in seen[0]
 

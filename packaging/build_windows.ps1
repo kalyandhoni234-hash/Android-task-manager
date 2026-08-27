@@ -4,6 +4,13 @@
 #   dist\AndroidTaskManager.exe        — windowed build for normal users
 #   dist\AndroidTaskManager-debug.exe  — console build that echoes connection
 #                                        state (diagnostics)
+#   dist\BUILD_ENV_FREEZE.txt          — pip freeze of the exact build venv
+#                                        (provenance, published with the
+#                                        release alongside SHA256SUMS.txt)
+#
+# Dependency policy: everything that gets frozen into the EXE is pinned via
+# packaging\windows-build-constraints.txt, and the build venv is audited in
+# place (INSTALL -> AUDIT SAME VENV -> BUILD) before PyInstaller runs.
 #
 # Both builds carry the product icon (packaging\assets\atm.ico) and a Windows
 # version resource generated from the single version authority
@@ -30,12 +37,39 @@ if (-not (Test-Path (Join-Path $Venv "Scripts\python.exe"))) {
 
 $Py = Join-Path $Venv "Scripts\python.exe"
 
-Write-Host "Installing the app with the GUI extra ..."
-& $Py -m pip install --quiet --upgrade pip
-& $Py -m pip install --quiet ".[gui]"
+# Single version authority for everything frozen into the EXE (Qt/PySide6
+# family + PyInstaller and its hook pack). The constraints file is resolved
+# once per release cycle; pip-audit below validates this exact environment
+# before anything is packaged.
+$Constraints = Join-Path $Root "packaging\windows-build-constraints.txt"
 
-Write-Host "Installing PyInstaller ..."
-& $Py -m pip install --quiet "pyinstaller>=6.0"
+Write-Host "Installing the app with the GUI extra (constrained) ..."
+& $Py -m pip install --quiet --upgrade pip
+& $Py -m pip install --quiet -c $Constraints ".[gui]"
+
+Write-Host "Installing PyInstaller (constrained) ..."
+& $Py -m pip install --quiet -c $Constraints "pyinstaller"
+
+# INSTALL -> AUDIT SAME VENV -> BUILD EXE.
+# pip-audit runs through the same interpreter ($Py) against the environment
+# that is about to be frozen into the executables. Any reported vulnerability
+# fails here instead of shipping inside a release artifact. pip-audit itself
+# is an auditor (never bundled into the EXE), so its own version floats.
+Write-Host "Installing pip-audit into the build venv ..."
+& $Py -m pip install --quiet "pip-audit>=2.9"
+
+Write-Host "Auditing Windows build dependencies (same venv as the EXE) ..."
+& $Py -m pip_audit
+if ($LASTEXITCODE -ne 0) {
+    throw "pip-audit reported vulnerabilities in the Windows build environment."
+}
+
+# Provenance: record the dependency set of THIS interpreter next to the
+# release artifacts, before packaging begins. Contains package==version
+# lines only - never secrets or host details beyond package versions.
+Write-Host "Recording build-environment provenance (dist\BUILD_ENV_FREEZE.txt) ..."
+New-Item -ItemType Directory -Force -Path (Join-Path $Root "dist") | Out-Null
+& $Py -m pip freeze | Set-Content -Path (Join-Path $Root "dist\BUILD_ENV_FREEZE.txt")
 
 # The package version is the single source of truth - read it back so the
 # Windows version resource and the final output messages match it exactly.

@@ -45,6 +45,23 @@ _BLOCK_SIZE = 4096
 #: Slack added around ranged reads (local headers carry variable extras).
 _RANGE_SLACK = 4096
 
+# --- Safety limits (Priority #6) ------------------------------------------
+#
+# Real-world sizes for the two entries we read are tiny by comparison:
+# compiled AndroidManifest.xml is typically tens of KiB and resources.arsc
+# rarely exceeds ~2 MiB even in very large applications. The caps below are
+# generous headroom, enforced BEFORE any transfer/inflation so a hostile APK
+# cannot drive unbounded memory, transfer or CPU work.
+
+#: Maximum declared compressed size for any single entry we will fetch.
+_MAX_ENTRY_COMPRESSED_BYTES = 8 * 1024 * 1024
+
+#: Maximum decompressed output accepted from a single entry.
+_MAX_ENTRY_INFLATED_BYTES = 4 * 1024 * 1024
+
+#: Upper bound on central-directory entries we are willing to iterate.
+_MAX_TOTAL_ENTRIES = 4096
+
 _ZIP_EOCD_SIGNATURE = b"PK\x05\x06"
 _ZIP_CENTRAL_SIGNATURE = b"PK\x01\x02"
 _ZIP_LOCAL_SIGNATURE = b"PK\x03\x04"
@@ -123,6 +140,10 @@ def parse_central_directory(tail: bytes) -> dict[str, tuple[int, int, int]]:
     ) = struct.unpack_from("<HHHHIIH", tail, eocd_index + 4)
     if cd_offset == 0xFFFFFFFF or cd_size == 0xFFFFFFFF:
         raise ApkLabelError("zip64 archives are not supported")
+    if total_entries > _MAX_TOTAL_ENTRIES:
+        raise ApkLabelError(
+            f"central directory declares too many entries ({total_entries})"
+        )
     cd_start = eocd_index - cd_size
     if cd_start < 0:
         raise ApkLabelError("central directory truncated in tail buffer")
@@ -133,8 +154,8 @@ def parse_central_directory(tail: bytes) -> dict[str, tuple[int, int, int]]:
         if position + 46 > len(tail) or tail[position : position + 4] != _ZIP_CENTRAL_SIGNATURE:
             break
         (method, _mtime, _mdate, _crc, compressed_size, _uncompressed_size,
-         name_len, extra_len, comment_len, _disk_start, _attrs,
-         local_offset) = struct.unpack_from("<HHHHHIIIHHHHI", tail, position + 10)
+         name_len, extra_len, comment_len, _disk_start, _attrs, _ext_attrs,
+         local_offset) = struct.unpack_from("<HHHIIIHHHHHII", tail, position + 10)
         name_start = position + 46
         name_end = name_start + name_len
         if name_end > len(tail):
@@ -166,11 +187,43 @@ def extract_entry(
     if method == _METHOD_STORED:
         return payload
     if method == _METHOD_DEFLATE:
-        try:
-            return zlib.decompressobj(-15).decompress(payload)
-        except zlib.error as exc:
-            raise ApkLabelError("deflate stream corrupted") from exc
+        return _inflate_bounded(payload)
     raise ApkLabelError(f"unsupported compression method {method}")
+
+
+def _inflate_bounded(payload: bytes) -> bytes:
+    """Inflate *payload* with a hard cap on produced output.
+
+    Feeds the stream in bounded slices and drains pending output through a
+    length-limited ``flush`` so a decompression bomb can never allocate more
+    than ``_MAX_ENTRY_INFLATED_BYTES`` (plus one chunk) before failing.
+    """
+    engine = zlib.decompressobj(-15)
+    out = bytearray()
+
+    def _absorb(chunk: bytes) -> None:
+        nonlocal out
+        out += chunk
+        if len(out) > _MAX_ENTRY_INFLATED_BYTES:
+            raise ApkLabelError("entry inflates beyond the safety limit")
+
+    data = payload
+    try:
+        while True:
+            _absorb(engine.decompress(data, 65536))
+            data = engine.unconsumed_tail
+            if engine.eof:
+                break
+            if not data:
+                while True:
+                    pending = engine.flush(65536)
+                    if not pending:
+                        break
+                    _absorb(pending)
+                break
+    except zlib.error as exc:
+        raise ApkLabelError("deflate stream corrupted") from exc
+    return bytes(out)
 
 
 def range_read_plan(offset: int, length: int) -> tuple[int, int, int]:
@@ -294,7 +347,7 @@ def extract_label_reference(manifest: bytes) -> int | str | None:
         try:
             (_line, _comment, _ns, name_index, attribute_start, attribute_size,
              attribute_count, _id_idx, _class_idx, _style_idx) = struct.unpack_from(
-                "<IIIIIHHHHHH", manifest, start + 8
+                "<IIIIIHHHHH", manifest, start + 8
             )
         except struct.error:
             continue
@@ -513,6 +566,10 @@ class ApkLabelResolver:
                     continue
                 offset, compressed_size, method = entry
                 if compressed_size <= 0:
+                    continue
+                if compressed_size > _MAX_ENTRY_COMPRESSED_BYTES:
+                    # Declared transfer exceeds the safety cap: skip the entry
+                    # BEFORE issuing any ranged read (fail small, fail early).
                     continue
                 skip_blocks, blocks, slice_start = range_read_plan(
                     offset, compressed_size

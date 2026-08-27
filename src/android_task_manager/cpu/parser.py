@@ -71,6 +71,9 @@ def _parse_counters(
     except ValueError as exc:
         raise CPUParseError(f"Non-integer counter on CPU line: {full_line!r}") from exc
 
+    if any(v < 0 for v in values):
+        raise CPUParseError(f"Negative tick counter on CPU line: {full_line!r}")
+
     user, nice, system, idle, iowait, irq, softirq = values
     return CPUCounters(
         core_id=core_id,

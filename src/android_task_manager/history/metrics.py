@@ -17,6 +17,7 @@ epsilon. With too few samples the trend is ``INSUFFICIENT`` — never guessed.
 
 from __future__ import annotations
 
+import math
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -91,15 +92,18 @@ class MetricHistory:
     # ------------------------------------------------------------------
 
     def add_sample(self, value: float | None, timestamp: float | None = None) -> None:
-        """Record *value* unless it is unavailable or a duplicate of the
-        previous recorded value."""
+        """Record *value* unless it is unavailable, non-finite, or a
+        duplicate of the previous recorded value."""
         if value is None:
             return
-        if self._dedupe and self._samples and self._samples[-1].value == value:
+        fval = float(value)
+        if not math.isfinite(fval):
+            return
+        if self._dedupe and self._samples and self._samples[-1].value == fval:
             return
         if timestamp is None:
             timestamp = time.monotonic()
-        self._samples.append(Sample(float(value), float(timestamp)))
+        self._samples.append(Sample(fval, float(timestamp)))
 
     def clear(self) -> None:
         """Drop every sample (device disconnected / new session)."""

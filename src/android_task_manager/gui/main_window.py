@@ -6,7 +6,7 @@ import time as _time
 from dataclasses import replace
 from datetime import datetime
 
-from PySide6.QtCore import QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -67,6 +67,7 @@ from ..investigation.tree import build_process_tree
 from ..memory.models import MemorySnapshot
 from ..network.models import NetworkSnapshot
 from ..network_investigation.models import NetworkInvestigationSnapshot
+from ..performance import to_timeline_event
 from ..permissions.models import PackagePermissionAudit
 from ..process.inspector_models import ProcessInspectionSnapshot
 from ..process.models import ProcessSnapshot
@@ -99,8 +100,10 @@ from .findings_page import FindingsPage
 from .incident_dialog import IncidentDialog
 from .intelligence_page import IntelligencePage, IntelligenceState
 from .investigation_dialog import InvestigationDialog
-from .monitor import ConnectionState, MonitorWorker
+from .monitor import _DEVICE_LOSS_STATES, ConnectionState, MonitorWorker
 from .overview_page import OverviewPage, OverviewState
+from .performance_integration import PerformanceIntegration
+from .performance_page import PerformancePage
 from .process_tree_dialog import ProcessTreeDialog
 from .setup_panel import INSTALL_ADB_STEPS, USB_DEBUGGING_STEPS, SetupPanel
 from .sidebar import DEFAULT_PAGE, Sidebar
@@ -209,6 +212,48 @@ _BUILTIN_RULES: tuple[Rule, ...] = (
 )
 
 
+def _build_confirmation(parent, title: str, text: str) -> QMessageBox:
+    """Build a Cancel/Yes question rendered strictly as literal plain text.
+
+    Device-derived strings (app labels, process names, package names) are
+    never interpreted as rich text, so hostile markup cannot restyle a
+    confirmation. Button set and default match the previous static-dialog
+    behavior (Cancel | Yes, Cancel default).
+    """
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setWindowTitle(title)
+    box.setText(text)
+    box.setTextFormat(Qt.TextFormat.PlainText)
+    box.setStandardButtons(
+        QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes
+    )
+    box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+    return box
+
+
+def _ask_confirmation(parent, title: str, text: str) -> bool:
+    return (
+        _build_confirmation(parent, title, text).exec()
+        == QMessageBox.StandardButton.Yes
+    )
+
+
+def _build_information(parent, title: str, text: str) -> QMessageBox:
+    """Build an OK-only informational dialog, also strictly plain text."""
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Information)
+    box.setWindowTitle(title)
+    box.setText(text)
+    box.setTextFormat(Qt.TextFormat.PlainText)
+    box.setStandardButtons(QMessageBox.StandardButton.Ok)
+    return box
+
+
+def _show_information(parent, title: str, text: str) -> None:
+    _build_information(parent, title, text).exec()
+
+
 class MainWindow(QMainWindow):
     """Desktop dashboard consuming the monitor's normalized snapshots.
 
@@ -286,6 +331,10 @@ class MainWindow(QMainWindow):
         self.apps = ApplicationsPage()
         self.security = BaselinePanel()
         self.incident = IncidentPanel()
+        self.performance = PerformancePage()
+        self.performance.view_timeline_requested.connect(
+            lambda: self._on_page_requested("intelligence")
+        )
 
         #: Most recent ProcessSnapshot, kept so inspection results can be
         #: associated with the matching ProcessInfo (cpu/memory percent).
@@ -362,6 +411,9 @@ class MainWindow(QMainWindow):
         #: monitor already publishes (zero additional ADB traffic).
         self._session_history = SessionHistory()
         self._timeline = EventTimeline()
+        #: v0.9 performance engine integration (thin Qt adapter over the pure
+        #: performance domain). Wired in ``wire``; ``None`` until then.
+        self._performance: PerformanceIntegration | None = None
         self._rules = RuleEngine(_BUILTIN_RULES)
         self._health: DeviceHealth | None = None
         self._recommendations: tuple[Recommendation, ...] = ()
@@ -447,6 +499,9 @@ class MainWindow(QMainWindow):
         self.intelligence.background_refresh_requested.connect(
             self._on_background_refresh
         )
+        self.intelligence.performance_requested.connect(
+            lambda: self._on_page_requested("performance")
+        )
         self.device_page.export_requested.connect(self._on_device_report_export_requested)
 
         self._pages = QStackedWidget()
@@ -461,6 +516,7 @@ class MainWindow(QMainWindow):
         self._pages.addWidget(self._scrolled(self._health_page()))  # 7: HEALTH
         self._pages.addWidget(self._scrolled(self.diagnostics_page))  # 8: DIAGNOSTICS
         self._pages.addWidget(self._scrolled(self.intelligence))  # 9: INTELLIGENCE
+        self._pages.addWidget(self._scrolled(self.performance))  # 10: PERFORMANCE
 
         self.sidebar.set_active(DEFAULT_PAGE)
         self._pages.setCurrentIndex(0)
@@ -522,6 +578,7 @@ class MainWindow(QMainWindow):
             "health": 7,
             "diagnostics": 8,
             "intelligence": 9,
+            "performance": 10,
         }
         index = order.get(key)
         if index is None:
@@ -914,6 +971,9 @@ class MainWindow(QMainWindow):
         snapshot = self._last_seen_tracker.annotate(snapshot, datetime.now())
         self._background_apps = snapshot
         self.intelligence.set_background_apps(snapshot)
+        # Feed already-resolved application identity to the v0.9 engine.
+        if self._performance is not None:
+            self._performance.on_background_apps(snapshot)
 
         # Request labels only for packages not yet resolved this session, so
         # the one-off APK reads never repeat and never loop.
@@ -927,6 +987,65 @@ class MainWindow(QMainWindow):
             if missing:
                 self._label_requested.update(missing)
                 self._apps.resolve_labels_requested.emit(missing)
+
+    # ------------------------------------------------------------------
+    # v0.9 performance engine output (reuses the unified Timeline)
+    # ------------------------------------------------------------------
+
+    def _on_performance_findings(self, findings: object) -> None:
+        """A condition started/recovered: refresh the performance views.
+
+        The open-condition set is read from the deduplicating tracker (the
+        source of truth), so a started condition appears and a recovered one
+        disappears without the window keeping any parallel state.
+        """
+        self._refresh_performance_page()
+
+    def _on_performance_evidence(self, evidence: object) -> None:
+        """Fresh performance evidence (data, not findings): refresh the views."""
+        self._refresh_performance_page()
+
+    def _on_performance_events(self, events: object) -> None:
+        """Record performance lifecycle events on the unified timeline and
+        refresh the performance views.
+
+        The events are already deduplicated by the condition tracker, so this
+        only appends genuine STARTED / ACTIVE / RECOVERED transitions — never
+        a per-tick flood. The mapping to ``TimelineEvent`` reuses the shared
+        ``to_timeline_event`` adapter, so the timeline model is untouched.
+        """
+        for event in events:  # type: ignore[attr-defined]
+            tl = to_timeline_event(
+                event, event_id="T-000", device_serial=self._device_serial
+            )
+            self._timeline.record(
+                event_type=tl.event_type,
+                title=tl.title,
+                description=tl.description,
+                monotonic=tl.monotonic,
+                severity=tl.severity,
+                entity=tl.entity,
+                evidence_refs=tl.evidence_refs,
+                device_serial=tl.device_serial,
+            )
+        self._refresh_performance_page()
+
+    def _refresh_performance_page(self) -> None:
+        """Render the performance engine's current state onto both surfaces.
+
+        The complete, canonical view is built by the orchestrator's
+        :meth:`view_state` (the single source of truth: active conditions from
+        the deduplicating tracker, the evidence/event history it retains, and
+        the background-app correlation). Both the standalone PERFORMANCE page
+        and the compact Intelligence-page summary render that same snapshot —
+        the window keeps no parallel performance state.
+        """
+        if self._performance is None:
+            return
+        state = self._performance._orchestrator.view_state()
+        connected = self._connection_state is ConnectionState.CONNECTED
+        self.performance.refresh(state, connected)
+        self.intelligence.refresh_performance(state, connected)
 
     def on_app_labels_ready(self, labels: object) -> None:
         """Adopt resolved application labels and refresh the background view.
@@ -1000,7 +1119,7 @@ class MainWindow(QMainWindow):
                 wall_clock=datetime.now(),
                 device_serial=self._device_serial,
             )
-        else:
+        elif state in _DEVICE_LOSS_STATES:
             # No device: stale identity facts and telemetry must never
             # linger on the pages — clear the mirrors the overview and the
             # device page render from.
@@ -1041,6 +1160,10 @@ class MainWindow(QMainWindow):
             self.intelligence.set_background_apps(None)
             self._stack.setCurrentIndex(0)
             self.setup.show_state(state, detail)
+            # Performance telemetry must never linger on a disconnected device:
+            # the live page is re-rendered disconnected (the adapter also resets
+            # its condition tracker via end_session).
+            self._refresh_performance_page()
         self._refresh_intelligence()
         self._refresh_overview()
         self._refresh_device_page()
@@ -1121,17 +1244,14 @@ class MainWindow(QMainWindow):
     def _confirm_force_stop(self, package: str) -> bool:
         """Ask the user to explicitly confirm a package force stop."""
         name = self.processes.inspector.display_name() or package
-        answer = QMessageBox.question(
+        return _ask_confirmation(
             self,
             "Force Stop Application?",
             "This will stop:\n"
             f"    {name}\n\n"
             f"Package:\n    {package}\n\n"
             "Force Stop the application?",
-            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
-            QMessageBox.StandardButton.Cancel,
         )
-        return answer == QMessageBox.StandardButton.Yes
 
     def on_action_result(self, result: ActionResult) -> None:
         """Render the typed action outcome in the inspector panel."""
@@ -1228,7 +1348,7 @@ class MainWindow(QMainWindow):
         now = _time.monotonic()
         task = self._automation.submit(recommendation, now)
         if task.status.value == "failed":
-            QMessageBox.information(self, "Recommendation unavailable", task.message)
+            _show_information(self, "Recommendation unavailable", task.message)
             self._refresh_intelligence()
             return
         task = self._automation.approve(task.task_id, now)
@@ -1238,7 +1358,7 @@ class MainWindow(QMainWindow):
         if gated is None:
             return
         if gated.status.value in ("blocked", "failed"):
-            QMessageBox.information(self, "Action not run", gated.message)
+            _show_information(self, "Action not run", gated.message)
             self._refresh_intelligence()
             return
         self._pending_automation_task = gated
@@ -1348,14 +1468,7 @@ class MainWindow(QMainWindow):
             f"{warnings.get(action, '')}\n\n"
             "Continue?"
         )
-        answer = QMessageBox.question(
-            self,
-            title,
-            message,
-            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
-            QMessageBox.StandardButton.Cancel,
-        )
-        return answer == QMessageBox.StandardButton.Yes
+        return _ask_confirmation(self, title, message)
 
     def _on_manage_requested(self, package: str) -> None:
         """Navigate from a process to its application management page.
@@ -1828,6 +1941,16 @@ def wire(window: MainWindow, worker: MonitorWorker) -> None:
     worker.serial_ready.connect(window.on_serial_ready)
     worker.devices_available.connect(window.update_devices)
     worker.foreground_snapshot.connect(window.update_foreground)
+    # v0.9 performance engine: reuse the EXISTING monitor signals (no new
+    # timer, no new worker). The adapter forwards updates to the pure domain.
+    window._performance = PerformanceIntegration()
+    worker.snapshots.connect(window._performance.on_snapshots)
+    worker.storage_snapshot.connect(window._performance.on_storage)
+    worker.serial_ready.connect(window._performance.on_serial_ready)
+    worker.connection_changed.connect(window._performance.on_connection_changed)
+    window._performance.findings_ready.connect(window._on_performance_findings)
+    window._performance.events_ready.connect(window._on_performance_events)
+    window._performance.evidence_ready.connect(window._on_performance_evidence)
     window.closed.connect(worker.stop)
     window.overview.baseline_requested.connect(
         lambda: window._on_page_requested("baseline")

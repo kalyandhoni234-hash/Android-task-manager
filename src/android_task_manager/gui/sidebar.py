@@ -26,6 +26,7 @@ SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     ("SECURITY", (("baseline", "Baseline"), ("findings", "Findings"))),
     ("DEVICE", (("device", "Device"), ("health", "Health"), ("diagnostics", "Diagnostics"))),
     ("INTELLIGENCE", (("intelligence", "Intelligence"),)),
+    ("PERFORMANCE", (("performance", "Performance"),)),
 )
 
 #: The page shown when the dashboard first appears.

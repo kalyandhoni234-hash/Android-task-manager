@@ -153,11 +153,16 @@ def parse_stat(text: str) -> StatFields:
 def parse_cmdline(text: str) -> str | None:
     """Convert NUL-separated cmdline args to a readable string.
 
+    ANSI escape sequences are stripped so they never reach the GUI as
+    garbled text or formatting control characters.
+
     Empty/whitespace-only cmdline (including bare NUL padding) yields ``None``
     so the UI can show "N/A" without inventing a command line from the process
     name.
     """
-    joined = " ".join(text.split("\x00")).strip()
+    from .parser import strip_ansi
+
+    joined = " ".join(strip_ansi(text).split("\x00")).strip()
     return joined or None
 
 

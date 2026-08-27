@@ -1,0 +1,23 @@
+# Windows EXE build constraints — exact pins for the dependency subset that
+# PyInstaller freezes into AndroidTaskManager.exe / AndroidTaskManager-debug.exe.
+#
+# Scope (deliberately minimal): the PySide6/Qt family bundled into the EXE and
+# the PyInstaller toolchain that produces it. Development-only tooling
+# (pytest / ruff / mypy / build / pip-audit) intentionally floats and is NOT
+# listed here; runtime dependencies are intentionally none (pyproject.toml).
+#
+# This file is the single version authority for the Windows release toolchain:
+#   * packaging/build_windows.ps1 provisions the build venv through it (-c)
+#     and audits that venv with pip-audit BEFORE packaging;
+#   * CI's ".[dev,gui]" installs consume it so Linux validation tracks the
+#     same versions intended for the Windows release.
+#
+# Refresh procedure: bump a pin, then let the release workflow's pip-audit +
+# full test gate re-validate. Versions below were resolved from an actual
+# Windows build venv created by packaging/build_windows.ps1.
+PySide6==6.11.1
+PySide6-Addons==6.11.1
+PySide6-Essentials==6.11.1
+shiboken6==6.11.1
+pyinstaller==6.22.0
+pyinstaller-hooks-contrib==2026.6

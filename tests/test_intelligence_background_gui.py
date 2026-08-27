@@ -19,7 +19,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
+from PySide6.QtWidgets import QApplication, QLabel
 
 from android_task_manager.applications import (
     AppCategory,
@@ -317,8 +317,8 @@ def test_background_force_stop_emits_for_user_app_with_confirmation(qtapp, monke
     _connect(window)
     _feed_background_data(window)
     monkeypatch.setattr(
-        QMessageBox, "question",
-        staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes),
+        "android_task_manager.gui.main_window._ask_confirmation",
+        staticmethod(lambda *a, **k: True),
     )
     emitted: list[tuple[str, str]] = []
     window.action_requested.connect(lambda a, p: emitted.append((a, p)))

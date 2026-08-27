@@ -21,19 +21,34 @@ from .models import ProcessCPUMetrics, ProcessIdentity
 # TIME+ column values look like "24:48.52", "85:09.94", "2:20.81", "0:00".
 _TIME_RE = re.compile(r"^\d+:\d{2}(:\d{2})?(\.\d+)?$")
 
-# ANSI/terminal control sequences (CSI: ESC [ params final). These appear in
-# real `top` output (e.g. cursor-position reports, bold/reverse-video row
-# decoration) and must never be parsed as process data. Normalization is
-# isolated to this top parser.
-_ANSI_CSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+# ANSI/terminal control sequences.  These appear in real `top` output (e.g.
+# cursor-position reports, bold/reverse-video row decoration) and must never
+# be parsed as process data.  Coverage includes:
+#   CSI  ESC [ ... final        (cursor control, SGR styling)
+#   OSC  ESC ] ... BEL/ST       (Operating System Command)
+#   DCS  ESC P ... ST           (Device Control String)
+#   SOS  ESC X ... ST           (Start of String)
+#   PM   ESC ^ ... ST           (Privacy Message)
+#   APC  ESC _ ... ST           (Application Program Command)
+_ANSI_RE = re.compile(
+    r"""
+    \x1b (?:                             # ESC initiates every sequence
+        \[ [0-9;?]* [ -/]* [@-~]        # CSI: ESC [ params final
+      | \] .+? (?:\x07 | \x1b\\)        # OSC: ESC ] ... (BEL | ST)
+      | [PZX^_] .+? \x1b\\              # DCS/SOS/PM/APC: ESC [PZX^_] ... ST
+    )
+    """,
+    re.VERBOSE | re.DOTALL,
+)
 
 
-def _strip_ansi(text: str) -> str:
-    """Remove ANSI/terminal control sequences from top output.
+def strip_ansi(text: str) -> str:
+    """Remove all ANSI/terminal control sequences from *text*.
 
-    Only used here in the top parser; ps parsing is untouched.
+    Public so parsers outside this module (ps, cmdline) can sanitize
+    device-derived strings before they reach the GUI.
     """
-    return _ANSI_CSI_RE.sub("", text)
+    return _ANSI_RE.sub("", text)
 
 
 class ProcessParseError(ValueError):
@@ -61,7 +76,7 @@ def parse_ps_output(text: str) -> list[ProcessIdentity]:
     seen_pids: set[int] = set()
 
     for raw_line in text.splitlines():
-        tokens = raw_line.strip().split()
+        tokens = strip_ansi(raw_line).strip().split()
         if not tokens or tokens[0] == "PID":
             continue  # blank line or the column header row
 
@@ -110,7 +125,7 @@ def parse_top_output(text: str) -> list[ProcessCPUMetrics]:
     (PR/NI/VIRT/RES/SHR) are naturally tolerated. Rows whose PID cannot be
     parsed are skipped.
     """
-    text = _strip_ansi(text)
+    text = strip_ansi(text)
     lines = text.splitlines()
 
     header_index = _find_table_header(lines)
@@ -184,12 +199,19 @@ def _parse_state(value: str) -> str | None:
 
 
 def _parse_pct(value: str) -> float | None:
-    """Parse a percent cell, returning None for a missing/unparseable metric."""
+    """Parse a percent cell, returning None for a missing/unparseable metric.
+
+    Android ``top -n 1`` reports %MEM in 0-100; %CPU can legitimately
+    exceed 100 on multi-core devices.  Negative values and values above
+    1000 (absurd, indicating corrupted output) are rejected.
+    """
     cleaned = value.strip().strip("%")
     if not cleaned:
         return None
     try:
-        return float(cleaned)
+        result = float(cleaned)
     except ValueError:
-        # On an otherwise-valid row, a bad percent cell is a missing metric.
         return None
+    if result < 0.0 or result > 1000.0:
+        return None
+    return result

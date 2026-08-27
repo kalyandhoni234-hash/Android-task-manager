@@ -31,6 +31,8 @@ class DiagnosticCategory(Enum):
     CPU = "cpu"
     NETWORK = "network"
     SECURITY = "security"
+    #: Process-count / scheduler pressure (advanced performance intelligence).
+    PROCESS = "process"
 
 
 class DiagnosticSeverity(Enum):

@@ -50,6 +50,10 @@ def parse_meminfo(text: str) -> dict[str, int]:
             raise MemoryParseError(
                 f"Field {name!r} has a non-integer value {tokens[0]!r} in /proc/meminfo."
             ) from exc
+        if value < 0:
+            raise MemoryParseError(
+                f"Field {name!r} has a negative value {value} in /proc/meminfo."
+            )
         values[_FIELD_MAP[name]] = value
 
     missing = _REQUIRED - set(values)

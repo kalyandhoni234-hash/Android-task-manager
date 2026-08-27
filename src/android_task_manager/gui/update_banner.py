@@ -16,6 +16,21 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from ..updater import UpdateCheckResult
 
+_ALLOWED_URL_SCHEMES = frozenset({"http", "https"})
+
+
+def _is_safe_url(url: str | None) -> bool:
+    """Return True only if *url* uses an allowed scheme (http/https)."""
+    if not url:
+        return False
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    return parsed.scheme.lower() in _ALLOWED_URL_SCHEMES
+
 
 def _display_version(version: str) -> str:
     """Normalize a tag to a single leading ``v`` (GitHub tags are ``v0.2.0``)."""
@@ -86,5 +101,7 @@ class UpdateBanner(QWidget):
         self.hide()
 
     def _open_release(self) -> None:
-        if self._url:
-            QDesktopServices.openUrl(QUrl(self._url))
+        if _is_safe_url(self._url):
+            url = self._url
+            assert url is not None  # guaranteed by _is_safe_url
+            QDesktopServices.openUrl(QUrl(url))

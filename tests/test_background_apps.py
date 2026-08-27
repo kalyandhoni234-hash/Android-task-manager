@@ -199,15 +199,19 @@ def test_application_without_running_process_is_absent() -> None:
     assert [e.package_name for e in snapshot.entries] == ["com.whatsapp"]
 
 
-def test_process_with_unknown_uid_resolves_by_name() -> None:
+def test_process_with_unknown_uid_is_dropped_uid_or_unknown() -> None:
+    """Priority #7: attribution is UID-or-Unknown.
+
+    A process whose UID is unknown is never attributed merely because its
+    name equals an installed package — the honest result is no entry.
+    """
     snapshot = build_background_apps(
         _processes(_proc(23, "com.whatsapp", uid=None)),
         _inventory(_app("com.whatsapp", uid=10001)),
         _foreground("com.launcher"),
         _memory(),
     )
-    assert [e.package_name for e in snapshot.entries] == ["com.whatsapp"]
-    assert snapshot.entries[0].uid == 10001
+    assert snapshot.entries == []
 
 
 def test_process_with_unknown_uid_and_unmatched_name_is_dropped() -> None:

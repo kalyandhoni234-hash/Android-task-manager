@@ -13,10 +13,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication
 
 from android_task_manager.action import ActionErrorKind, ActionResult
 from android_task_manager.adb.exceptions import ADBDisconnectedError
+from android_task_manager.gui import main_window as mw_main
 from android_task_manager.gui.action_worker import ActionWorker
 from android_task_manager.gui.main_window import MainWindow, wire, wire_actions
 from android_task_manager.gui.monitor import MonitorWorker
@@ -496,9 +497,8 @@ def test_force_stop_cancel_does_not_execute(qtapp, monkeypatch) -> None:
     emitted: list[tuple[str, str]] = []
     window.action_requested.connect(lambda *args: emitted.append(args))
     monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda *args, **kwargs: QMessageBox.StandardButton.Cancel,
+        "android_task_manager.gui.main_window._ask_confirmation",
+        lambda *a, **k: False,
     )
     window._on_action_clicked("force_stop", "com.heavy.app")
     assert emitted == []
@@ -512,9 +512,8 @@ def test_force_stop_confirm_executes(qtapp, monkeypatch) -> None:
     emitted: list[tuple[str, str]] = []
     window.action_requested.connect(lambda *args: emitted.append(args))
     monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+        "android_task_manager.gui.main_window._ask_confirmation",
+        lambda *a, **k: True,
     )
     window._on_action_clicked("force_stop", "com.heavy.app")
     assert emitted == [("force_stop", "com.heavy.app")]
@@ -526,30 +525,37 @@ def test_harmless_actions_skip_confirmation(qtapp, monkeypatch) -> None:
     _select_verified(window)
     emitted: list[tuple[str, str]] = []
     window.action_requested.connect(lambda *args: emitted.append(args))
-    called = {"question": False}
+    called = {"confirmation": False}
 
-    def question(*args, **kwargs):
-        called["question"] = True
-        return QMessageBox.StandardButton.Yes
+    def confirmation(*args, **kwargs):
+        called["confirmation"] = True
+        return True
 
-    monkeypatch.setattr(QMessageBox, "question", question)
+    monkeypatch.setattr(
+        "android_task_manager.gui.main_window._ask_confirmation", confirmation
+    )
     window._on_action_clicked("open_app", "com.heavy.app")
     window._on_action_clicked("app_info", "com.heavy.app")
     assert emitted == [("open_app", "com.heavy.app"), ("app_info", "com.heavy.app")]
-    assert not called["question"]
+    assert not called["confirmation"]
 
 
 def test_confirmation_dialog_names_the_package(qtapp, monkeypatch) -> None:
     window = MainWindow()
     texts: list[str] = []
-    monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda parent, title, text, *args, **kwargs: (
-            texts.append(text),
-            QMessageBox.StandardButton.Cancel,
-        )[1],
-    )
+
+    def capture_builder(parent, title, text):
+        texts.append(text)
+        import types
+
+        from PySide6.QtWidgets import QMessageBox
+
+        return types.SimpleNamespace(
+            text=text,
+            exec=lambda: QMessageBox.StandardButton.Cancel,
+        )
+
+    monkeypatch.setattr(mw_main, "_build_confirmation", capture_builder)
     window.processes.inspector.set_packages({"com.heavy.app"})
     window.processes.inspector.set_snapshot(
         ProcessInspectionSnapshot(pid=8150, name="com.heavy.app", uid=10001, timestamp=1.0)
@@ -790,13 +796,13 @@ def test_no_stale_confirmation_state_after_switch(qtapp, monkeypatch) -> None:
     emitted: list[tuple[str, str]] = []
     window.action_requested.connect(lambda *args: emitted.append(args))
     confirmed: list[str] = []
+
+    def confirmation(parent, title, text):
+        confirmed.append(text)
+        return True
+
     monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda *args, **kwargs: (
-            confirmed.append(args[2]),
-            QMessageBox.StandardButton.Yes,
-        )[1],
+        "android_task_manager.gui.main_window._ask_confirmation", confirmation
     )
     window._on_action_clicked("force_stop", "com.heavy.app")
     assert emitted == [("force_stop", "com.heavy.app")]
