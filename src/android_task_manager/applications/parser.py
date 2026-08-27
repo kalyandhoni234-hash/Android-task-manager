@@ -19,11 +19,16 @@ from ..action.package import validate_package_name
 from .models import AppCategory, AppDetails, AppInfo
 
 #: One ``package:...`` inventory line: ``package:/path/base.apk=name
-#: uid=123 versionCode:42``. The path half may contain dots, dashes and
-#: underscores; the name half must survive strict package validation.
+#: uid=123 versionCode:42`` or ``uid:123`` (colon separator, seen on
+#: Android 11+ devices).  Fields may appear in either order; both are
+#: optional.  The path half may contain dots, dashes and underscores;
+#: the name half must survive strict package validation.
 _INVENTORY_LINE_RE = re.compile(
     r"^package:(?P<path>\S+)=(?P<name>[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)*)"
-    r"(?: uid=(?P<uid>\d+))?(?: versionCode:(?P<version_code>\d+))?$"
+    r"(?:\s+uid[=:](?P<uid>\d+))?"
+    r"(?:\s+versionCode:(?P<version_code>\d+))?"
+    r"(?:\s+uid[=:](?P<uid_trailing>\d+))?"
+    r"$"
 )
 
 #: ``package:name`` lines from the -s / -3 / -d companion lists.
@@ -118,7 +123,7 @@ def parse_inventory_lines(text: str) -> dict[str, _InventoryEntry]:
             continue
         entries[name] = _InventoryEntry(
             apk_path=match.group("path"),
-            uid=_to_int(match.group("uid")),
+            uid=_to_int(match.group("uid") or match.group("uid_trailing")),
             version_code=_to_int(match.group("version_code")),
         )
     return entries
