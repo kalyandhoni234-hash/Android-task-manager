@@ -16,7 +16,7 @@
 # full test gate re-validate. Versions below were resolved from an actual
 # Windows build venv created by packaging/build_windows.ps1.
 PySide6==6.11.1
-PySide6-Addons==6.11.1
+PySide6-Addons==6.11.2
 PySide6-Essentials==6.11.1
 shiboken6==6.11.1
 pyinstaller==6.22.0
