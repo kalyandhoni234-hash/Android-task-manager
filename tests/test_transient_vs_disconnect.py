@@ -362,8 +362,8 @@ class TestMainWindowTransientFailure:
 
         window.update_connection(ConnectionState.COLLECTOR_ERROR, "battery parse error")
 
-        # setup.show_state should NOT be called for COLLECTOR_ERROR.
-        window.setup.show_state.assert_not_called()
+        # P#9: COLLECTOR_ERROR must NOT switch the GUI to setup.
+        window._stack.setCurrentIndex.assert_not_called()
 
     def test_genuine_disconnect_clears_caches(self, qtapp) -> None:
         window = self._make_minimal_window(qtapp)
@@ -391,6 +391,14 @@ class TestMainWindowTransientFailure:
         window.update_connection(ConnectionState.DISCONNECTED, "device lost")
 
         window.setup.show_state.assert_called_once()
+
+    def test_timeout_no_setup_screen(self, qtapp) -> None:
+        """P#9: TIMEOUT must NOT switch the GUI to setup."""
+        window = self._make_minimal_window(qtapp)
+
+        window.update_connection(ConnectionState.TIMEOUT, "command timed out")
+
+        window._stack.setCurrentIndex.assert_not_called()
 
 
 # ======================================================================

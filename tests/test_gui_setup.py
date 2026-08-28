@@ -170,6 +170,55 @@ def test_window_switches_back_on_disconnect(qtapp) -> None:
     assert window.setup._title.text() == "No Android device detected"
 
 
+def test_window_shows_setup_on_adb_missing(qtapp) -> None:
+    """ADB_MISSING must surface the setup panel with Locate ADB action."""
+    window = MainWindow()
+    window.update_connection(ConnectionState.ADB_MISSING, "adb not found")
+    assert window._stack.currentIndex() == 0
+    assert window.setup._title.text() == "ADB not found"
+    assert not window.setup._locate.isHidden()
+    assert not window.setup._retry.isHidden()
+
+
+def test_window_shows_setup_on_multiple_devices(qtapp) -> None:
+    window = MainWindow()
+    window.update_connection(ConnectionState.MULTIPLE_DEVICES, "")
+    assert window._stack.currentIndex() == 0
+    assert window.setup._title.text() == "Multiple devices found"
+
+
+def test_window_adb_missing_does_not_clear_session(qtapp) -> None:
+    """ADB_MISSING must NOT wipe cached telemetry or session identity."""
+    window = MainWindow()
+    window.update_connection(ConnectionState.CONNECTED, "")
+    window._device_serial = "ABC123"
+    window.update_connection(ConnectionState.ADB_MISSING, "missing")
+    # Session identity must survive a non-loss error state.
+    assert window._device_serial == "ABC123"
+    # The setup panel must be visible with the correct state.
+    assert window._stack.currentIndex() == 0
+    assert window.setup._title.text() == "ADB not found"
+
+
+def test_window_collector_error_keeps_dashboard_when_connected(qtapp) -> None:
+    """P#9: COLLECTOR_ERROR after connect must NOT switch to setup."""
+    window = MainWindow()
+    window.update_connection(ConnectionState.CONNECTED, "")
+    assert window._stack.currentIndex() == 1
+    window.update_connection(ConnectionState.COLLECTOR_ERROR, "battery parse error")
+    # Dashboard must remain visible; only the status strip updates.
+    assert window._stack.currentIndex() == 1
+
+
+def test_window_timeout_keeps_dashboard_when_connected(qtapp) -> None:
+    """P#9: TIMEOUT after connect must NOT switch to setup."""
+    window = MainWindow()
+    window.update_connection(ConnectionState.CONNECTED, "")
+    assert window._stack.currentIndex() == 1
+    window.update_connection(ConnectionState.TIMEOUT, "command timed out")
+    assert window._stack.currentIndex() == 1
+
+
 def test_window_forwards_first_run_signals(qtapp) -> None:
     window = MainWindow()
     actions: list[str] = []

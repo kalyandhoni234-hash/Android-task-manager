@@ -1164,6 +1164,22 @@ class MainWindow(QMainWindow):
             # the live page is re-rendered disconnected (the adapter also resets
             # its condition tracker via end_session).
             self._refresh_performance_page()
+        elif state is ConnectionState.ADB_MISSING:
+            # ADB not found: always actionable setup panel (Locate ADB).
+            # NOT device loss — no serial binding or telemetry to release.
+            self._stack.setCurrentIndex(0)
+            self.setup.show_state(state, detail)
+        elif state is ConnectionState.MULTIPLE_DEVICES:
+            # Device picker: actionable setup panel (select + connect).
+            self._stack.setCurrentIndex(0)
+            self.setup.show_state(state, detail)
+        elif state in (ConnectionState.TIMEOUT, ConnectionState.COLLECTOR_ERROR):
+            # P#9 transient states: preserve current session/telemetry.
+            # Only show setup when still in initial connection (setup panel
+            # visible); once on the dashboard the status strip is sufficient.
+            self.setup.show_state(state, detail)
+            if self._stack.currentIndex() == 0:
+                self._stack.setCurrentIndex(0)
         self._refresh_intelligence()
         self._refresh_overview()
         self._refresh_device_page()
