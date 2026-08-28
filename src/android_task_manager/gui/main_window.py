@@ -132,10 +132,6 @@ def _memory_used_percent(memory: MemorySnapshot | None) -> float | None:
     return used / memory.total_kb * 100
 
 
-# ---------------------------------------------------------------------------
-# Builtin intelligence rules (canonical thresholds, never restated values)
-# ---------------------------------------------------------------------------
-
 _BUILTIN_RULES: tuple[Rule, ...] = (
     Rule(
         rule_id="cpu_high",
@@ -336,83 +332,35 @@ class MainWindow(QMainWindow):
             lambda: self._on_page_requested("intelligence")
         )
 
-        #: Most recent ProcessSnapshot, kept so inspection results can be
-        #: associated with the matching ProcessInfo (cpu/memory percent).
         self._latest_processes: ProcessSnapshot | None = None
-
-        #: Most recent live snapshots, kept so the Device page can mirror a
-        #: compact status summary without any additional ADB traffic.
         self._latest_cpu: CPUSnapshot | None = None
         self._latest_memory: MemorySnapshot | None = None
         self._latest_battery: BatterySnapshot | None = None
         self._latest_network: NetworkSnapshot | None = None
-
-        #: Most recent live storage snapshot (internal /data volume),
-        #: published by the monitor on its own slow cadence.
         self._latest_storage: StorageSnapshot | None = None
-
-        #: Most recent NetworkInvestigationSnapshot, kept so process
-        #: inspections can render the UID-attributed socket view.
         self._latest_network_investigation: NetworkInvestigationSnapshot | None = None
-
-        #: The one-shot update check fires once, shortly after the window
-        #: is shown; the flag keeps it from ever firing twice in a session.
         self._update_check_started = False
-
-        #: Baseline & Security GUI-layer state (in-memory; persistence is
-        #: still deferred): the saved baseline, the current snapshot and the
-        #: report of the last drift check.
         self._baseline: BaselineSnapshot | None = None
         self._current_snapshot: BaselineSnapshot | None = None
         self._drift_report: DriftReport | None = None
-
-        #: Persistent per-device baseline store (assigned by the app with
-        #: the platform user-data directory). ``None`` in tests keeps the
-        #: GUI hermetic: nothing is ever read or written without a store.
         self.baseline_store: BaselineStore | None = None
-
-        #: Incident reporting GUI-layer state: the last heuristic report,
-        #: the permission audits seen so far (bounded), the generated report
-        #: and the (lazily created) viewer dialog.
         self._heuristics: HeuristicReport | None = None
         self._permission_audits: list[PackagePermissionAudit] = []
         self._incident_report: IncidentReport | None = None
         self._incident_dialog: IncidentDialog | None = None
         self._device_label: str | None = None
         self._android_version: str | None = None
-
-        #: ADB serial of the connected device (published by the monitor's
-        #: connection state; used for export filenames and baseline lookup).
         self._device_serial: str | None = None
-
-        #: Structured identity snapshot of the connected device (collected
-        #: once per connection session); None when nothing is connected.
         self.device_information: DeviceInformation | None = None
-
-        #: Most recent diagnostics report (pure evaluation of the latest
-        #: snapshots + device information on the GUI thread). None when no
-        #: device is connected — a report must never outlive its device.
         self._diagnostics_report: DiagnosticReport | None = None
-
-        #: Investigation-core GUI-layer state: the observation window fed
-        #: by the monitor (deduped, bounded), the stability reports of the
-        #: last drift check, and the lazily created investigation dialogs.
         self._observation_tracker = ObservationTracker()
         self._stability: dict[str, StabilityReport] | None = None
         self._investigation_dialog: InvestigationDialog | None = None
         self._process_tree_dialog: ProcessTreeDialog | None = None
         self._why_dialog: WhyFlaggedDialog | None = None
         self._diagnostics_dialog: DiagnosticsDialog | None = None
-
-        #: Device intelligence state (v0.8): the session history, the
-        #: per-session event timeline, the builtin rules, the latest health
-        #: evaluation, the derived recommendations and the automation
-        #: engine. All pure/deterministic — they consume the snapshots the
-        #: monitor already publishes (zero additional ADB traffic).
         self._session_history = SessionHistory()
         self._timeline = EventTimeline()
-        #: v0.9 performance engine integration (thin Qt adapter over the pure
-        #: performance domain). Wired in ``wire``; ``None`` until then.
         self._performance: PerformanceIntegration | None = None
         self._rules = RuleEngine(_BUILTIN_RULES)
         self._health: DeviceHealth | None = None
@@ -421,34 +369,14 @@ class MainWindow(QMainWindow):
         self._automation = AutomationEngine()
         self._pending_automation_task: AutomationTask | None = None
         self._latest_app_snapshot: ApplicationSnapshot | None = None
-        #: The connected apps worker (set by wire_apps); ``None`` when the
-        #: window was not wired to one. Guarded before any label request.
         self._apps: object | None = None
-        #: Most recent foreground (resumed-activity) signal from the device.
-        #: ``None`` until the monitor has sampled it (or the device was lost).
         self._latest_foreground: ForegroundSnapshot | None = None
-        #: Resolved human-readable labels keyed by package name (device APK
-        #: reads, cached per session). Missing keys fall back to package name.
         self._app_labels: dict[str, str | None] = {}
-        #: Packages for which a label resolution has already been requested
-        #: this session — prevents re-requesting (and re-reading APKs for)
-        #: labels that could not be resolved.
         self._label_requested: set[str] = set()
-        #: Aggregated background-user-app view (rebuilt from the snapshots
-        #: the monitor + apps worker already publish; no extra polling).
         self._background_apps: BackgroundAppsSnapshot | None = None
-        #: Bounded last-seen annotation for background entries; cleared on
-        #: every disconnect so no stale observation survives a reconnect.
         self._last_seen_tracker = LastSeenTracker()
-        #: Package whose background-app details are currently being shown.
         self._background_selected: str | None = None
-        #: Verified installed-package set (process-to-app identity link for
-        #: recommendations). Starts empty, never guessed: force-stop targets
-        #: are only proposed for packages the device has verified installed.
         self._verified_packages: set[str] = set()
-        #: User-category packages (Phase M system-app protection): the only
-        #: set force-stop recommendations may target. Derived from the
-        #: inventory's authoritative category classification; starts empty.
         self._user_packages: set[str] = set()
 
         self.processes.inspection_requested.connect(self.inspect_requested.emit)
@@ -473,7 +401,6 @@ class MainWindow(QMainWindow):
         self.incident.view_requested.connect(self._on_incident_view_requested)
         self.incident.export_requested.connect(self._on_incident_export_requested)
 
-        # -- Application shell: sidebar + pages ------------------------------
         self.sidebar = Sidebar()
         self.sidebar.page_requested.connect(self._on_page_requested)
         self.sidebar.diagnostics_requested.connect(self._on_diagnostics_requested)
@@ -506,17 +433,17 @@ class MainWindow(QMainWindow):
 
         self._pages = QStackedWidget()
         self._pages.setObjectName("pages")
-        self._pages.addWidget(self.overview)  # 0: OVERVIEW
-        self._pages.addWidget(self._scrolled(self.processes))  # 1: PROCESSES
-        self._pages.addWidget(self._scrolled(self.network))  # 2: NETWORK
-        self._pages.addWidget(self._scrolled(self.apps))  # 3: APPLICATIONS
-        self._pages.addWidget(self._scrolled(self.security))  # 4: BASELINE
-        self._pages.addWidget(self._scrolled(self.findings))  # 5: FINDINGS
-        self._pages.addWidget(self._scrolled(self.device_page))  # 6: DEVICE
-        self._pages.addWidget(self._scrolled(self._health_page()))  # 7: HEALTH
-        self._pages.addWidget(self._scrolled(self.diagnostics_page))  # 8: DIAGNOSTICS
-        self._pages.addWidget(self._scrolled(self.intelligence))  # 9: INTELLIGENCE
-        self._pages.addWidget(self._scrolled(self.performance))  # 10: PERFORMANCE
+        self._pages.addWidget(self.overview)
+        self._pages.addWidget(self._scrolled(self.processes))
+        self._pages.addWidget(self._scrolled(self.network))
+        self._pages.addWidget(self._scrolled(self.apps))
+        self._pages.addWidget(self._scrolled(self.security))
+        self._pages.addWidget(self._scrolled(self.findings))
+        self._pages.addWidget(self._scrolled(self.device_page))
+        self._pages.addWidget(self._scrolled(self._health_page()))
+        self._pages.addWidget(self._scrolled(self.diagnostics_page))
+        self._pages.addWidget(self._scrolled(self.intelligence))
+        self._pages.addWidget(self._scrolled(self.performance))
 
         self.sidebar.set_active(DEFAULT_PAGE)
         self._pages.setCurrentIndex(0)
@@ -594,10 +521,6 @@ class MainWindow(QMainWindow):
         self._diagnostics_dialog.show()
         self._diagnostics_dialog.raise_()
         self._diagnostics_dialog.activateWindow()
-
-    # ------------------------------------------------------------------
-    # Overview / findings refresh (presentation only)
-    # ------------------------------------------------------------------
 
     def _refresh_overview(self) -> None:
         """Summarize the existing GUI-layer state into the Overview page."""
@@ -703,10 +626,6 @@ class MainWindow(QMainWindow):
                 report,
                 self._connection_state is ConnectionState.CONNECTED,
             )
-
-    # ------------------------------------------------------------------
-    # Device intelligence (v0.8): pure evaluation over existing snapshots
-    # ------------------------------------------------------------------
 
     def _record_metric_samples(self, timestamp: float | None) -> None:
         """Record one sample per live metric into the session history."""
@@ -848,10 +767,6 @@ class MainWindow(QMainWindow):
             )
         )
 
-    # ------------------------------------------------------------------
-    # Monitor signal handlers (GUI thread)
-    # ------------------------------------------------------------------
-
     def update_snapshots(
         self,
         cpu: CPUSnapshot | None,
@@ -930,10 +845,6 @@ class MainWindow(QMainWindow):
         self._latest_foreground = snapshot
         self._build_background_apps()
 
-    # ------------------------------------------------------------------
-    # Background user-app aggregation (pure build over existing snapshots)
-    # ------------------------------------------------------------------
-
     def _build_background_apps(self) -> None:
         """Aggregate running processes into per-application background entries.
 
@@ -987,10 +898,6 @@ class MainWindow(QMainWindow):
             if missing:
                 self._label_requested.update(missing)
                 self._apps.resolve_labels_requested.emit(missing)
-
-    # ------------------------------------------------------------------
-    # v0.9 performance engine output (reuses the unified Timeline)
-    # ------------------------------------------------------------------
 
     def _on_performance_findings(self, findings: object) -> None:
         """A condition started/recovered: refresh the performance views.
@@ -1194,9 +1101,6 @@ class MainWindow(QMainWindow):
         captured in this session always wins over disk state.
         """
         self._device_serial = serial
-        # Per-session intelligence state: history, timeline and cooldowns
-        # belong to one device session and reset with it. The serial is
-        # already read by the monitor's connect — no additional ADB traffic.
         now = _time.monotonic()
         self._session_history.begin_session(serial, timestamp=now)
         self._timeline.begin_session(serial, monotonic=now)
@@ -1209,10 +1113,6 @@ class MainWindow(QMainWindow):
 
     def show_install_help(self) -> None:
         QMessageBox.information(self, "Install ADB", INSTALL_ADB_STEPS)
-
-    # ------------------------------------------------------------------
-    # Process inspection result handlers (GUI thread)
-    # ------------------------------------------------------------------
 
     def on_inspection_ready(self, snapshot: ProcessInspectionSnapshot) -> None:
         """Attach the table's latest CPU/MEM metrics, then render the panel."""
@@ -1232,10 +1132,6 @@ class MainWindow(QMainWindow):
     def on_inspection_failed(self, pid: int, message: str) -> None:
         """Show the clean "process no longer available" state."""
         self.processes.show_inspection_gone(pid, message)
-
-    # ------------------------------------------------------------------
-    # Device action handlers (GUI thread)
-    # ------------------------------------------------------------------
 
     def _on_action_clicked(self, action: str, package: str) -> None:
         """Gate a clicked action behind confirmation, then forward it.
@@ -1387,10 +1283,6 @@ class MainWindow(QMainWindow):
         self._verified_packages = set(packages)
         self._evaluate_intelligence()
 
-    # ------------------------------------------------------------------
-    # Application inventory handlers (GUI thread; results from AppsWorker)
-    # ------------------------------------------------------------------
-
     def _on_apps_refresh_requested(self) -> None:
         """Flip the page into its loading state, then run the inventory
         read on the apps worker's thread."""
@@ -1495,10 +1387,6 @@ class MainWindow(QMainWindow):
         """
         self._on_page_requested("applications")
         self.apps.select_package(package)
-
-    # ------------------------------------------------------------------
-    # Baseline & Security handlers (GUI thread; results from BaselineWorker)
-    # ------------------------------------------------------------------
 
     def on_baseline_saved(
         self, snapshot: BaselineSnapshot, source: str = "created"
@@ -1677,10 +1565,6 @@ class MainWindow(QMainWindow):
         self.processes.inspector.show_permission_audit_failed(package, message)
         self.apps.show_permission_audit_failed(package, message)
 
-    # ------------------------------------------------------------------
-    # Incident reporting handlers (GUI thread; build + exports)
-    # ------------------------------------------------------------------
-
     def _on_incident_generate_requested(self) -> None:
         """Build a report from the current session data on the GUI thread.
 
@@ -1761,10 +1645,6 @@ class MainWindow(QMainWindow):
         if self._incident_dialog is not None:
             self._incident_dialog.show_export_result(success, message)
 
-    # ------------------------------------------------------------------
-    # Device report export (GUI thread assembles; worker writes)
-    # ------------------------------------------------------------------
-
     def _on_device_report_export_requested(self) -> None:
         """Ask for a file target, assemble the payload, hand it to the worker.
 
@@ -1802,10 +1682,6 @@ class MainWindow(QMainWindow):
 
     def on_device_report_export_completed(self, success: bool, message: str) -> None:
         self.device_page.show_export_result(success, message)
-
-    # ------------------------------------------------------------------
-    # Investigation-core handlers (GUI thread; pure in-memory aggregation)
-    # ------------------------------------------------------------------
 
     def _on_timeline_requested(self) -> None:
         """Open the investigation timeline for the current session.
@@ -1924,10 +1800,6 @@ class MainWindow(QMainWindow):
             for record in report.entities
         ]
         return entity_stability_for(entity, records)
-
-    # ------------------------------------------------------------------
-    # Update check (one-shot, background worker, silent failures)
-    # ------------------------------------------------------------------
 
     def on_update_check_completed(self, result: UpdateCheckResult) -> None:
         """Render the typed check outcome; failures simply hide the banner."""

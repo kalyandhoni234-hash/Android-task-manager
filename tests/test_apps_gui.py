@@ -579,6 +579,91 @@ def test_wire_apps_connects_refresh_and_details_paths(qtapp) -> None:
     assert len(details) == 1 and details[0].parse_complete is False
 
 
+# ---------------------------------------------------------------------------
+# Performance regression: table rebuild with large inventories
+# ---------------------------------------------------------------------------
+
+
+def _large_snapshot(count: int) -> ApplicationSnapshot:
+    apps = []
+    for i in range(count):
+        cat = AppCategory.USER if i % 3 != 0 else AppCategory.SYSTEM
+        apps.append(
+            AppInfo(
+                package_name=f"com.example.app{i}",
+                apk_path=f"/data/app/com.example.app{i}-1/base.apk",
+                uid=10000 + i,
+                version_code=i,
+                category=cat,
+                enabled=i % 5 != 0,
+            )
+        )
+    return ApplicationSnapshot(timestamp=1.0, applications=apps)
+
+
+def test_page_rebuilds_with_hundreds_of_applications(qtapp) -> None:
+    page = ApplicationsPage()
+    snapshot = _large_snapshot(300)
+    page.set_snapshot(snapshot)
+    assert page._table.rowCount() == 300
+    assert page._table.updatesEnabled
+    assert "300 installed" in page._count.text()
+
+
+def test_page_rebuild_leaves_updates_enabled(qtapp) -> None:
+    page = ApplicationsPage()
+    page.set_snapshot(_large_snapshot(265))
+    assert page._table.updatesEnabled
+
+
+def test_page_rebuild_preserves_sorting(qtapp) -> None:
+    page = ApplicationsPage()
+    page.set_snapshot(_large_snapshot(100))
+    assert page._table.isSortingEnabled()
+    first_pkg = page._table.item(0, 0).text()
+    assert first_pkg == "com.example.app0"
+
+
+def test_page_filtering_after_large_rebuild(qtapp) -> None:
+    page = ApplicationsPage()
+    page.set_snapshot(_large_snapshot(200))
+    page._filter.setText("app10")
+    assert page._table.rowCount() > 0
+    for row in range(page._table.rowCount()):
+        assert "app10" in page._table.item(row, 0).text().lower()
+    page._filter.setText("")
+    assert page._table.rowCount() == 200
+
+
+def test_page_snapshot_refresh_does_not_crash(qtapp) -> None:
+    page = ApplicationsPage()
+    page.set_snapshot(_large_snapshot(100))
+    page.set_snapshot(_large_snapshot(150))
+    assert page._table.rowCount() == 150
+    assert page._table.updatesEnabled
+    assert page._table.isSortingEnabled()
+
+
+def test_page_snapshot_refresh_to_empty(qtapp) -> None:
+    page = ApplicationsPage()
+    page.set_snapshot(_large_snapshot(100))
+    page.set_snapshot(ApplicationSnapshot(timestamp=2.0))
+    assert page._table.rowCount() == 0
+    assert page._table.updatesEnabled
+
+
+def test_window_on_apps_inventory_ready_large_snapshot(qtapp) -> None:
+    window = MainWindow()
+    _wire_window(window)
+    _show_dashboard(window)
+    snapshot = _large_snapshot(265)
+    window.on_apps_inventory_ready(snapshot)
+    assert window.apps._table.rowCount() == 265
+    assert window.apps._table.updatesEnabled
+    assert window.apps._table.isSortingEnabled()
+    assert "265 installed" in window.apps._count.text()
+
+
 class _NoopActions(QObject):
     def reload_packages(self) -> None:
         pass

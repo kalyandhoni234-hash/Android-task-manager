@@ -131,8 +131,13 @@ class ApplicationsPage(QWidget):
         self._table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         header = self._table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(_COLUMN_APK, QHeaderView.ResizeMode.Stretch)
+        self._table.setColumnWidth(_COLUMN_PACKAGE, 280)
+        self._table.setColumnWidth(_COLUMN_TYPE, 80)
+        self._table.setColumnWidth(_COLUMN_STATE, 80)
+        self._table.setColumnWidth(_COLUMN_UID, 80)
+        self._table.setColumnWidth(_COLUMN_VERSION, 100)
         self._table.setSortingEnabled(True)
         self._table.sortItems(_DEFAULT_SORT_COLUMN, _DEFAULT_SORT_ORDER)
         header.sortIndicatorChanged.connect(self._on_sort_changed)
@@ -256,38 +261,42 @@ class ApplicationsPage(QWidget):
 
     def _rebuild(self) -> None:
         visible = [a for a in self._all_apps if self._matches_filter(a)]
-        self._table.setSortingEnabled(False)
-        self._table.setRowCount(len(visible))
-        for row_index, app in enumerate(visible):
-            uid = app.uid
-            version = app.version_code
-            values = (
-                _SortableItem(app.package_name, app.package_name.lower()),
-                _SortableItem(
-                    _TYPE_LABELS.get(app.category, "UNKNOWN"),
-                    _TYPE_LABELS.get(app.category, "UNKNOWN").lower(),
-                ),
-                _SortableItem(
-                    _ENABLED_LABELS.get(app.enabled, "N/A"),
-                    str(_ENABLED_LABELS.get(app.enabled, "N/A")).lower(),
-                ),
-                _SortableItem(
-                    "N/A" if uid is None else str(uid),
-                    uid if uid is not None else float("-inf"),
-                ),
-                _SortableItem(
-                    "N/A" if version is None else str(version),
-                    version if version is not None else float("-inf"),
-                ),
-                _SortableItem(app.apk_path or "N/A", (app.apk_path or "N/A").lower()),
-            )
-            for column, item in enumerate(values):
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                if app.category is AppCategory.SYSTEM:
-                    item.setBackground(QBrush(_SYSTEM_BACKGROUND))
-                self._table.setItem(row_index, column, item)
-        self._table.setSortingEnabled(True)
-        self._table.sortItems(self._sort_column, self._sort_order)
+        self._table.setUpdatesEnabled(False)
+        try:
+            self._table.setSortingEnabled(False)
+            self._table.setRowCount(len(visible))
+            for row_index, app in enumerate(visible):
+                uid = app.uid
+                version = app.version_code
+                values = (
+                    _SortableItem(app.package_name, app.package_name.lower()),
+                    _SortableItem(
+                        _TYPE_LABELS.get(app.category, "UNKNOWN"),
+                        _TYPE_LABELS.get(app.category, "UNKNOWN").lower(),
+                    ),
+                    _SortableItem(
+                        _ENABLED_LABELS.get(app.enabled, "N/A"),
+                        str(_ENABLED_LABELS.get(app.enabled, "N/A")).lower(),
+                    ),
+                    _SortableItem(
+                        "N/A" if uid is None else str(uid),
+                        uid if uid is not None else float("-inf"),
+                    ),
+                    _SortableItem(
+                        "N/A" if version is None else str(version),
+                        version if version is not None else float("-inf"),
+                    ),
+                    _SortableItem(app.apk_path or "N/A", (app.apk_path or "N/A").lower()),
+                )
+                for column, item in enumerate(values):
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    if app.category is AppCategory.SYSTEM:
+                        item.setBackground(QBrush(_SYSTEM_BACKGROUND))
+                    self._table.setItem(row_index, column, item)
+            self._table.setSortingEnabled(True)
+            self._table.sortItems(self._sort_column, self._sort_order)
+        finally:
+            self._table.setUpdatesEnabled(True)
         self._count.setText(
             f"{len(visible)} / {len(self._all_apps)} installed"
             if self._filter_query

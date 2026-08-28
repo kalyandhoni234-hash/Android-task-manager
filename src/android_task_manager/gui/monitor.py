@@ -212,8 +212,6 @@ class MonitorWorker(QObject):
         self._connected = False
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_timer)
-        # An interval of 0 fires the first timeout as soon as the event
-        # loop starts: the first connection attempt happens immediately.
         self._timer.start(0)
 
     def _on_timer(self) -> None:
