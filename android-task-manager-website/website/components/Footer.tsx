@@ -31,6 +31,13 @@ export function Footer() {
           <span>Monitoring + device actions · No accounts</span>
         </div>
       </div>
+
+      <div className="mx-auto max-w-6xl px-6 pb-8">
+        <p className="text-xs text-text-tertiary">
+          Built by{" "}
+          <span className="text-accent-strong">Guru Sharan Kalyan</span>
+        </p>
+      </div>
     </footer>
   );
 }
