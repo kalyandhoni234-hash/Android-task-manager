@@ -27,10 +27,14 @@ SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
     ("DEVICE", (("device", "Device"), ("health", "Health"), ("diagnostics", "Diagnostics"))),
     ("INTELLIGENCE", (("intelligence", "Intelligence"),)),
     ("PERFORMANCE", (("performance", "Performance"),)),
+    ("AI", (("copilot", "AI Copilot"),)),
 )
 
 #: The page shown when the dashboard first appears.
 DEFAULT_PAGE = "overview"
+
+#: The Settings page is a permanent part of the navigation.
+PAGE_SETTINGS = "settings"
 
 
 class Sidebar(QWidget):
@@ -94,6 +98,18 @@ class Sidebar(QWidget):
         self.diagnostics_button.setAccessibleName("Diagnostic Log")
         self.diagnostics_button.clicked.connect(self.diagnostics_requested.emit)
         layout.addWidget(self.diagnostics_button)
+
+        # Settings is a permanent page in the navigation.
+        settings_button = QPushButton("Settings")
+        settings_button.setObjectName("navButton")
+        settings_button.setCheckable(True)
+        settings_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        settings_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        settings_button.setAccessibleName("Settings page")
+        settings_button.clicked.connect(lambda checked=False: self._on_clicked(PAGE_SETTINGS))
+        self._group.addButton(settings_button)
+        self._buttons[PAGE_SETTINGS] = settings_button
+        layout.addWidget(settings_button)
 
     def _on_clicked(self, key: str) -> None:
         self.set_active(key)

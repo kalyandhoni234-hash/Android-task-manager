@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 from ..action import ActionResult
 from ..applications import AppCategory, AppDetails, ApplicationSnapshot
 from ..permissions import PackagePermissionAudit
+from . import styles
 from .widgets import panel_host
 from .widgets.app_details_widget import AppDetailsWidget
 
@@ -53,9 +54,18 @@ _TYPE_LABELS = {
 }
 _ENABLED_LABELS = {True: "Enabled", False: "Disabled"}
 
-#: System rows get a quiet tint so the destructive-control boundary reads
-#: at a glance (kept inside the existing dark palette).
-_SYSTEM_BACKGROUND = QColor("#2b3238")
+#: Role used to mark which rows belong to system applications so their
+#: quiet tint can be re-applied when the theme changes.
+_SYSTEM_ROW_ROLE = Qt.ItemDataRole.UserRole + 1
+
+
+def _system_background() -> QBrush:
+    """Theme-aware tint for system-application rows.
+
+    Reads the active theme's ``table_row_system`` token so the tint follows
+    Dark/Light/Cyber instead of a hardcoded color.
+    """
+    return QBrush(QColor(styles.active_tokens().table_row_system))
 
 #: Caption shown before the first inventory read arrives.
 _AWAITING = "Waiting for the device — the application list appears here."
@@ -291,7 +301,8 @@ class ApplicationsPage(QWidget):
                 for column, item in enumerate(values):
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     if app.category is AppCategory.SYSTEM:
-                        item.setBackground(QBrush(_SYSTEM_BACKGROUND))
+                        item.setBackground(_system_background())
+                        item.setData(_SYSTEM_ROW_ROLE, True)
                     self._table.setItem(row_index, column, item)
             self._table.setSortingEnabled(True)
             self._table.sortItems(self._sort_column, self._sort_order)
@@ -302,6 +313,27 @@ class ApplicationsPage(QWidget):
             if self._filter_query
             else f"{len(visible)} installed"
         )
+
+    def apply_theme_colors(self) -> None:
+        """Re-apply the theme-aware system-row tint to the current table.
+
+        Called when the application theme changes so imperatively painted row
+        backgrounds stay in sync with Dark/Light/Cyber.
+        """
+        brush = _system_background()
+        self._table.setUpdatesEnabled(False)
+        try:
+            for row in range(self._table.rowCount()):
+                for column in range(self._table.columnCount()):
+                    item = self._table.item(row, column)
+                    if item is None:
+                        continue
+                    if item.data(_SYSTEM_ROW_ROLE):
+                        item.setBackground(brush)
+                    else:
+                        item.setBackground(QBrush())
+        finally:
+            self._table.setUpdatesEnabled(True)
 
     # ------------------------------------------------------------------
     # Detail panel forwarding

@@ -6,8 +6,9 @@ import time as _time
 from dataclasses import replace
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QHBoxLayout,
     QMainWindow,
@@ -93,6 +94,9 @@ from ..timeline import (
 from ..updater import UpdateCheckResult
 from .apps_page import ApplicationsPage
 from .connection_strip import ConnectionStrip
+from .copilot_page import CopilotPage
+from .copilot_settings import CopilotSettingsDialog
+from .copilot_worker import CopilotWorker
 from .device_page import DevicePage
 from .diagnostics_dialog import DiagnosticsDialog
 from .diagnostics_page import DiagnosticsPage
@@ -105,8 +109,9 @@ from .overview_page import OverviewPage, OverviewState
 from .performance_integration import PerformanceIntegration
 from .performance_page import PerformancePage
 from .process_tree_dialog import ProcessTreeDialog
+from .settings_page import SettingsPage
 from .setup_panel import INSTALL_ADB_STEPS, USB_DEBUGGING_STEPS, SetupPanel
-from .sidebar import DEFAULT_PAGE, Sidebar
+from .sidebar import DEFAULT_PAGE, PAGE_SETTINGS, Sidebar
 from .update_banner import UpdateBanner
 from .why_flagged_dialog import WhyFlaggedDialog
 from .widgets.baseline_panel import BaselinePanel
@@ -307,7 +312,7 @@ class MainWindow(QMainWindow):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"Android Task Manager {__version__}")
-        self.resize(960, 760)
+        self._apply_work_area_sizing()
 
         self.setup = SetupPanel()
         self.setup.retry_requested.connect(self.retry_requested.emit)
@@ -431,6 +436,23 @@ class MainWindow(QMainWindow):
         )
         self.device_page.export_requested.connect(self._on_device_report_export_requested)
 
+        self.settings_page = SettingsPage()
+        self.settings_page.theme_changed.connect(self._on_theme_changed)
+        self.copilot_page = CopilotPage()
+
+        # Wire the previously-unconnected Copilot configuration flows. The
+        # Configure buttons and the Test Connection button emitted signals
+        # that nothing listened to, so the dialog never opened. (Blocker 2.)
+        self.settings_page.copilot_manage_requested.connect(self._open_copilot_settings)
+        self.copilot_page.configure_requested.connect(self._open_copilot_settings)
+        self.copilot_page.chat_requested.connect(self._on_copilot_chat)
+        self.settings_page.copilot_test_requested.connect(self._on_copilot_test)
+
+        self._copilot_worker: "CopilotWorker | None" = None
+        self._copilot_dialog: "CopilotSettingsDialog | None" = None
+        self._current_page_key = "overview"
+        self._refresh_copilot_state()
+
         self._pages = QStackedWidget()
         self._pages.setObjectName("pages")
         self._pages.addWidget(self.overview)
@@ -444,6 +466,8 @@ class MainWindow(QMainWindow):
         self._pages.addWidget(self._scrolled(self.diagnostics_page))
         self._pages.addWidget(self._scrolled(self.intelligence))
         self._pages.addWidget(self._scrolled(self.performance))
+        self._pages.addWidget(self._scrolled(self.copilot_page))
+        self._pages.addWidget(self._scrolled(self.settings_page))
 
         self.sidebar.set_active(DEFAULT_PAGE)
         self._pages.setCurrentIndex(0)
@@ -470,6 +494,47 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(shell)
         self.setCentralWidget(self._stack)
         self._refresh_device_page()
+
+    def _apply_work_area_sizing(self) -> None:
+        """Size the window to fit inside the OS usable work area.
+
+        Replaces a fixed ``resize(960, 760)`` that could push the bottom edge
+        behind the Windows taskbar on smaller displays (e.g. 1366x768). The
+        window prefers a generous size but is always clamped so it stays fully
+        inside the available geometry, and it stays resizable for larger ones.
+        """
+        self.setMinimumSize(720, 540)
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            self.resize(1000, 760)
+            return
+        avail = screen.availableGeometry()
+        preferred = QSize(1000, 760)
+        # Leave a small margin so the frame never touches the work-area edge.
+        w = min(preferred.width(), max(avail.width() - 24, self.minimumWidth()))
+        h = min(preferred.height(), max(avail.height() - 24, self.minimumHeight()))
+        self.resize(w, h)
+        self._clamp_to_available_geometry()
+
+    def _clamp_to_available_geometry(self) -> None:
+        """Keep the window fully inside the usable work area (no taskbar overlap)."""
+        if self.isMaximized() or self.isFullScreen():
+            return
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        geo = self.geometry()
+        if geo.width() > avail.width() or geo.height() > avail.height():
+            self.resize(
+                min(geo.width(), avail.width()),
+                min(geo.height(), avail.height()),
+            )
+            geo = self.geometry()
+        x = min(max(geo.x(), avail.x()), avail.x() + avail.width() - geo.width())
+        y = min(max(geo.y(), avail.y()), avail.y() + avail.height() - geo.height())
+        if x != geo.x() or y != geo.y():
+            self.move(x, y)
 
     @staticmethod
     def _scrolled(widget: QWidget) -> QScrollArea:
@@ -506,10 +571,13 @@ class MainWindow(QMainWindow):
             "diagnostics": 8,
             "intelligence": 9,
             "performance": 10,
+            "copilot": 11,
+            PAGE_SETTINGS: 12,
         }
         index = order.get(key)
         if index is None:
             return
+        self._current_page_key = key
         self.sidebar.set_active(key)
         self._pages.setCurrentIndex(index)
 
@@ -521,6 +589,104 @@ class MainWindow(QMainWindow):
         self._diagnostics_dialog.show()
         self._diagnostics_dialog.raise_()
         self._diagnostics_dialog.activateWindow()
+
+    def _on_theme_changed(self, theme: str) -> None:
+        """Apply the selected theme to the application."""
+        from PySide6.QtWidgets import QApplication
+
+        from .styles import apply_theme
+
+        app = QApplication.instance()
+        if app is not None and isinstance(app, QApplication):
+            apply_theme(app, theme)
+        # Imperatively painted rows (e.g. system-app tints) must follow the theme.
+        self.apps.apply_theme_colors()
+
+    # ------------------------------------------------------------------
+    # Copilot configuration flow (Blocker 2)
+    # ------------------------------------------------------------------
+
+    def _open_copilot_settings(self) -> None:
+        """Open the Copilot settings dialog (Configure API Key / Gemini)."""
+        from ..copilot.settings import load_config
+
+        config = load_config()
+        dialog = CopilotSettingsDialog(config, self)
+        self._copilot_dialog = dialog
+        dialog.config_saved.connect(self._on_copilot_config_saved)
+        dialog.test_connection_requested.connect(self._on_copilot_test)
+        dialog.finished.connect(lambda _result: setattr(self, "_copilot_dialog", None))
+        dialog.exec()
+
+    def _on_copilot_config_saved(self, config) -> None:
+        """Reflect the freshly saved Copilot configuration in both panes."""
+        self.copilot_page.set_configured(config.is_configured)
+        self.settings_page.set_copilot_state(config.is_configured, config.masked_api_key())
+
+    def _refresh_copilot_state(self) -> None:
+        """Sync the Copilot panes with persisted configuration at startup."""
+        from ..copilot.settings import load_config
+
+        config = load_config()
+        self.copilot_page.set_configured(config.is_configured)
+        self.settings_page.set_copilot_state(config.is_configured, config.masked_api_key())
+
+    def _on_copilot_test(self, config) -> None:
+        """Run a Test Connection through the off-thread Copilot worker."""
+        worker = self._copilot_worker
+        if worker is None:
+            return
+        # The callers (Settings page / Copilot dialog) already hand us the
+        # configuration to validate, so we use it directly. The dialog syncs
+        # its live field content into the config before emitting.
+        worker.update_config(config)
+        worker.request_test_connection(config)
+
+    def _on_copilot_test_result(self, success: bool, message: str) -> None:
+        """Route the test result to whichever Copilot surface is active."""
+        if self._copilot_dialog is not None:
+            self._copilot_dialog.on_test_result(success, message)
+        else:
+            self.settings_page.set_test_result(success, message)
+
+    def _on_copilot_chat(self, query: str) -> None:
+        """Send a Copilot chat query using the latest persisted configuration."""
+        from ..copilot.models import CopilotContext, CopilotRequest
+
+        worker = self._copilot_worker
+        if worker is None:
+            return
+        from ..copilot.settings import load_config
+
+        config = load_config()
+        if not config.is_configured:
+            self.copilot_page.on_error(
+                "Gemini API key not configured. Open Copilot Settings to add your API key."
+            )
+            return
+        worker.update_config(config)
+        connected = self._connection_state is ConnectionState.CONNECTED
+        context = CopilotContext(
+            current_page=self._current_page_key,
+            connected=connected,
+        )
+        request = CopilotRequest(
+            query=query,
+            context=context,
+            conversation_history=self.copilot_page.conversation_history(),
+        )
+        worker.request_chat(request)
+
+    def _on_copilot_response(self, result) -> None:
+        """Display a Copilot worker result on the chat pane."""
+        if result.success and result.response is not None:
+            self.copilot_page.on_response(
+                result.request_query,
+                result.response.answer,
+                result.response.suggestions,
+            )
+        else:
+            self.copilot_page.on_error(result.error or "Unknown error")
 
     def _refresh_overview(self) -> None:
         """Summarize the existing GUI-layer state into the Overview page."""
@@ -1807,6 +1973,9 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt override
         super().showEvent(event)
+        # Keep the window inside the usable work area (no taskbar overlap),
+        # in case the display configuration changed since construction.
+        self._clamp_to_available_geometry()
         if not self._update_check_started:
             self._update_check_started = True
             # Give the dashboard a moment to settle, then run the one-shot
@@ -1970,3 +2139,18 @@ def wire_updates(window: MainWindow, worker) -> None:
     """
     window.update_check_requested.connect(worker.request_check)
     worker.check_completed.connect(window.on_update_check_completed)
+
+
+def wire_copilot(window: MainWindow, worker) -> None:
+    """Connect the Copilot worker to the window.
+
+    The worker runs LLM calls off the GUI thread (mirrors the other wire_*
+    helpers). Chat responses and Test Connection results return over queued
+    connections; the GUI thread only renders. The window keeps the worker
+    reference so it can refresh the configuration from disk before each
+    request, which is what makes the Configure API Key flow actually take
+    effect at runtime (Blocker 2).
+    """
+    window._copilot_worker = worker
+    worker.response_ready.connect(window._on_copilot_response)
+    worker.test_connection_result.connect(window._on_copilot_test_result)

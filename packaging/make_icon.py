@@ -78,7 +78,7 @@ def draw_icon(size: int) -> Image.Image:
     total = 3 * bar_w + 2 * gap
     x0 = cx - total / 2
     base = s * 0.86
-    for i, (h, color) in enumerate(zip(heights, colors)):
+    for i, (h, color) in enumerate(zip(heights, colors, strict=False)):
         x = x0 + i * (bar_w + gap)
         d.rounded_rectangle(
             [x, base - h, x + bar_w, base],

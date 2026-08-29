@@ -124,6 +124,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .action_worker import ActionWorker
         from .apps_worker import AppsWorker
         from .baseline_worker import BaselineWorker
+        from .copilot_worker import CopilotWorker
         from .device_report_worker import DeviceReportWorker
         from .incident_worker import IncidentWorker
         from .inspector_worker import ProcessInspectionWorker
@@ -132,6 +133,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             wire,
             wire_actions,
             wire_apps,
+            wire_copilot,
             wire_device_report,
             wire_incident,
             wire_inspector,
@@ -141,7 +143,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         from .monitor import MonitorWorker
         from .permission_worker import PermissionWorker
-        from .styles import DARK_STYLE
+        from .styles import apply_theme
         from .update_worker import UpdateWorker
     except ImportError:
         print(
@@ -151,9 +153,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
+    from ..copilot.settings import load_config
+    from ..settings import load_settings
+
     app = QApplication([sys.argv[0]])
     app.setApplicationName("Android Task Manager")
-    app.setStyleSheet(DARK_STYLE)
+    app_settings = load_settings()
+    apply_theme(app, app_settings.theme)
 
     # One shared ConnectionManager: the monitoring worker samples snapshots on
     # its thread; the inspection worker reads /proc/<pid> files on its own.
@@ -193,10 +199,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     incident_worker = IncidentWorker()
     device_report_worker = DeviceReportWorker()
     update_worker = UpdateWorker(current_version=__version__)
+    copilot_worker = CopilotWorker(load_config())
     wire(window, worker)
     wire_inspector(window, inspector)
     wire_actions(window, worker, actions)
     wire_apps(window, worker, apps, actions)
+    wire_copilot(window, copilot_worker)
     wire_security(window, baseline_worker)
     wire_permissions(window, permission_worker)
     wire_incident(window, incident_worker)
@@ -265,6 +273,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     update_thread = QThread()
     update_worker.moveToThread(update_thread)
 
+    copilot_thread = QThread()
+    copilot_worker.moveToThread(copilot_thread)
+
     threads = [
         thread,
         inspector_thread,
@@ -275,6 +286,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         incident_thread,
         device_report_thread,
         update_thread,
+        copilot_thread,
     ]
 
     def shutdown() -> None:
@@ -310,6 +322,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     incident_thread.start()
     device_report_thread.start()
     update_thread.start()
+    copilot_thread.start()
     window.show()
     return app.exec()
 

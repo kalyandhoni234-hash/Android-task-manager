@@ -28,3 +28,8 @@ packaging/build/
 
 # Phase-0 diagnostic reports (ad-hoc, timestamped)
 phase0_android_report_*.txt
+
+# Copilot secrets — never commit
+copilot-config.json
+.env
+*.env
