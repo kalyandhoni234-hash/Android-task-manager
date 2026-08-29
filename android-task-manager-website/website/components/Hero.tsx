@@ -4,7 +4,7 @@ import { GITHUB_URL } from "@/lib/constants";
 
 const FEATURE_LINES = [
   "CPU · Memory · Processes · Network · Battery",
-  "Process Inspector · Device Actions · Network Investigation",
+  "Diagnostics · Applications · AI Copilot · Themes",
 ];
 
 export function Hero() {
@@ -22,7 +22,7 @@ export function Hero() {
               className="h-1.5 w-1.5 animate-blink rounded-full bg-accent"
               aria-hidden="true"
             />
-            Windows (64-bit) · Open Source · No Python required
+            v1.0.0 · Windows (64-bit) · Open Source · No Python required
           </div>
 
           <h1 className="font-display text-balance text-4xl font-semibold leading-[1.08] tracking-tight text-text-primary sm:text-5xl lg:text-[3.4rem]">
@@ -32,9 +32,10 @@ export function Hero() {
           </h1>
 
           <p className="mt-6 max-w-lg text-lg leading-relaxed text-text-secondary">
-            Desktop-grade monitoring and process investigation for Android —
-            CPU, memory, processes, network and battery, gathered through ADB
-            and presented in a focused desktop dashboard.
+            Desktop-grade monitoring and diagnostics for Android — CPU, memory,
+            processes, network and battery, gathered through ADB. Run
+            evidence-based diagnostics, manage your apps, and ask the built-in
+            Copilot what it all means.
           </p>
 
           <div className="mt-6 flex flex-col gap-1.5">
@@ -53,7 +54,7 @@ export function Hero() {
               href="#download"
               className="inline-flex items-center justify-center rounded-md bg-accent px-5 py-3 text-sm font-medium text-white transition-colors hover:bg-accent-strong"
             >
-              Download for Windows
+              Download v1.0.0
             </a>
             <a
               href={GITHUB_URL}

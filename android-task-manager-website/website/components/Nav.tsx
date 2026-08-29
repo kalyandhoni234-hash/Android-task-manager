@@ -5,6 +5,8 @@ import { GITHUB_URL } from "@/lib/constants";
 
 const LINKS = [
   { href: "#features", label: "Features" },
+  { href: "#copilot", label: "Copilot" },
+  { href: "#themes", label: "Themes" },
   { href: "#connect", label: "How it works" },
   { href: GITHUB_URL, label: "GitHub", external: true },
 ];

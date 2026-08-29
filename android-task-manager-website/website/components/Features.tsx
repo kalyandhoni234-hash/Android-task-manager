@@ -47,6 +47,18 @@ const FEATURES = [
     body: "Targeted actions against a selected app — no kill-all, no data clearing, no restarts.",
     stat: "verified packages",
   },
+  {
+    label: "Device Information",
+    title: "An \"About phone\" dashboard",
+    body: "Hardware, Android version, security patch, build, kernel, memory, battery, storage, display and identifiers — collected once per connection.",
+    stat: "getprop · wm · df",
+  },
+  {
+    label: "Applications",
+    title: "Installed-app inventory",
+    body: "List system and user apps with versions and APK paths, inspect per-package details, audit permissions and run capability-gated actions.",
+    stat: "pm list packages",
+  },
 ];
 
 export function Features() {

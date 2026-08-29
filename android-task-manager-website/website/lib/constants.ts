@@ -11,4 +11,4 @@ export const GITHUB_RELEASES_URL = `${GITHUB_URL}/releases`;
 
 // Actual collected test count from the last verified run of
 // `python -m pytest --collect-only -q` against this repository.
-export const TEST_COUNT = 1736;
+export const TEST_COUNT = 2267;
